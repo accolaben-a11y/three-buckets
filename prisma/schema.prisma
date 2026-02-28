@@ -1,0 +1,185 @@
+generator client {
+  provider        = "prisma-client-js"
+  output          = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id            String    @id @default(uuid())
+  email         String    @unique
+  password_hash String
+  role          UserRole
+  full_name     String
+  contact_info  String?
+  is_active     Boolean   @default(true)
+  created_at    DateTime  @default(now())
+  clients       Client[]
+
+  @@map("users")
+}
+
+model Client {
+  id                    String           @id @default(uuid())
+  advisor_id            String
+  advisor               User             @relation(fields: [advisor_id], references: [id])
+  first_name            String
+  last_name             String
+  age                   Int
+  spouse_name           String?
+  spouse_age            Int?
+  marital_status        MaritalStatus
+  state                 String
+  target_retirement_age Int              @default(62)
+  planning_horizon_age  Int              @default(90)
+  model_survivor        Boolean          @default(false)
+  survivor_spouse       SurvivorSpouse?
+  survivor_event_age    Int?
+  created_at            DateTime         @default(now())
+  updated_at            DateTime         @updatedAt
+  income_items          IncomeItem[]
+  nest_egg_accounts     NestEggAccount[]
+  home_equity           HomeEquity?
+  scenarios             Scenario[]
+
+  @@map("clients")
+}
+
+model IncomeItem {
+  id                   String     @id @default(uuid())
+  client_id            String
+  client               Client     @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  owner                Owner
+  type                 IncomeType
+  label                String
+  monthly_amount_cents Int
+  start_age            Int
+  end_age              Int?
+  ss_age62_cents       Int?
+  ss_age67_cents       Int?
+  ss_age70_cents       Int?
+  ss_claim_age         Int?
+  pension_survivor_pct Int?
+  sort_order           Int        @default(0)
+
+  @@map("income_items")
+}
+
+model NestEggAccount {
+  id                         String      @id @default(uuid())
+  client_id                  String
+  client                     Client      @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  label                      String
+  account_type               AccountType
+  current_balance_cents      Int
+  monthly_contribution_cents Int         @default(0)
+  rate_of_return_bps         Int
+  monthly_draw_cents         Int         @default(0)
+  sort_order                 Int         @default(0)
+
+  @@map("nest_egg_accounts")
+}
+
+model HomeEquity {
+  id                              String     @id @default(uuid())
+  client_id                       String     @unique
+  client                          Client     @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  current_home_value_cents        Int
+  existing_mortgage_balance_cents Int        @default(0)
+  existing_mortgage_payment_cents Int        @default(0)
+  home_appreciation_rate_bps      Int        @default(400)
+  hecm_expected_rate_bps          Int        @default(550)
+  hecm_payout_type                HecmPayout @default(none)
+  hecm_tenure_monthly_cents       Int        @default(0)
+  hecm_loc_growth_rate_bps        Int        @default(600)
+  hecm_payoff_mortgage            Boolean    @default(false)
+
+  @@map("home_equity")
+}
+
+model Scenario {
+  id                          String        @id @default(uuid())
+  client_id                   String
+  client                      Client        @relation(fields: [client_id], references: [id], onDelete: Cascade)
+  name                        String
+  is_active                   Boolean       @default(false)
+  target_monthly_income_cents Int           @default(0)
+  bucket1_draw_cents          Int           @default(0)
+  bucket2_draw_cents          Int           @default(0)
+  bucket3_draw_cents          Int           @default(0)
+  bridge_funding_source       BridgeBucket?
+  ss_primary_claim_age        Int           @default(67)
+  ss_spouse_claim_age         Int           @default(67)
+  inflation_rate_bps          Int           @default(300)
+  planning_horizon_age        Int           @default(90)
+  notes                       String?
+  survivor_mode               Boolean       @default(false)
+  created_at                  DateTime      @default(now())
+  updated_at                  DateTime      @updatedAt
+
+  @@map("scenarios")
+}
+
+model GlobalSettings {
+  id                       String   @id @default("global")
+  inflation_rate_bps       Int      @default(300)
+  home_appreciation_bps    Int      @default(400)
+  loc_growth_rate_bps      Int      @default(600)
+  planning_horizon_age     Int      @default(90)
+  hecm_lending_limit_cents Int      @default(120975000)
+  session_timeout_minutes  Int      @default(60)
+  updated_at               DateTime @updatedAt
+
+  @@map("global_settings")
+}
+
+enum UserRole {
+  admin
+  advisor
+}
+
+enum MaritalStatus {
+  single
+  married
+  partnered
+}
+
+enum SurvivorSpouse {
+  primary
+  spouse
+}
+
+enum Owner {
+  primary
+  spouse
+  joint
+}
+
+enum IncomeType {
+  social_security
+  wage
+  commission
+  business
+  pension
+  other
+}
+
+enum AccountType {
+  qualified
+  non_qualified
+}
+
+enum HecmPayout {
+  none
+  lump_sum
+  loc
+  tenure
+}
+
+enum BridgeBucket {
+  bucket1
+  bucket2
+  bucket3
+}
