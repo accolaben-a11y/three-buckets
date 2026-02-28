@@ -14,6 +14,9 @@ const heSchema = z.object({
   hecm_tenure_monthly_cents: z.number().int().default(0),
   hecm_loc_growth_rate_bps: z.number().int().default(600),
   hecm_payoff_mortgage: z.boolean().default(false),
+  hecm_principal_limit_cents: z.number().int().min(0).default(0),
+  hecm_additional_lump_sum_cents: z.number().int().min(0).default(0),
+  hecm_cash_to_close_account_id: z.string().nullable().optional(),
 })
 
 async function getClientWithAuth(clientId: string, userId: string, role: string) {

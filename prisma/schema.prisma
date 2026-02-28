@@ -95,6 +95,9 @@ model HomeEquity {
   hecm_tenure_monthly_cents       Int        @default(0)
   hecm_loc_growth_rate_bps        Int        @default(600)
   hecm_payoff_mortgage            Boolean    @default(false)
+  hecm_principal_limit_cents      Int        @default(0)
+  hecm_additional_lump_sum_cents  Int        @default(0)
+  hecm_cash_to_close_account_id   String?
 
   @@map("home_equity")
 }
@@ -116,6 +119,9 @@ model Scenario {
   planning_horizon_age        Int           @default(90)
   notes                       String?
   survivor_mode               Boolean       @default(false)
+  bucket2_deposit_cents       Int           @default(0)
+  bucket2_deposit_account_id  String?
+  bucket3_repayment_cents     Int           @default(0)
   created_at                  DateTime      @default(now())
   updated_at                  DateTime      @updatedAt
 

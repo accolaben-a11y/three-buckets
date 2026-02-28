@@ -42,6 +42,8 @@ export interface FullCalculationInput {
     hecmTenureMonthlyCents: number
     hecmLocGrowthRateBps: number
     hecmPayoffMortgage: boolean
+    hecmPrincipalLimitCents: number
+    hecmAdditionalLumpSumCents: number
   } | null
 
   // Scenario settings
@@ -51,6 +53,8 @@ export interface FullCalculationInput {
   bucket3DrawCents: number
   inflationRateBps: number
   lendingLimitCents: number
+  bucket2DepositCents?: number
+  bucket3RepaymentCents?: number
 
   // Survivor
   survivorMode: boolean
@@ -107,6 +111,8 @@ export interface FullCalculationResult {
     bucket1MonthlyCents: number
     bucket2MonthlyCents: number
     bucket3MonthlyCents: number
+    grossTargetCents: number
+    adjustedTargetCents: number
   }
 
   // Longevity projection
@@ -134,6 +140,8 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     bucket3DrawCents,
     inflationRateBps,
     lendingLimitCents,
+    bucket2DepositCents = 0,
+    bucket3RepaymentCents = 0,
     survivorMode,
     survivorSpouse,
     survivorEventAge,
@@ -143,11 +151,10 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
   const monthsToRetirement = Math.max(0, (retirementAge - primaryAge) * 12)
   const yearsToRetirement = Math.max(0, retirementAge - primaryAge)
 
-  // Youngest borrower age at retirement for PLF
+  // Youngest borrower age at retirement for LOC projections
   const youngestCurrentAge = spouseAge !== null && spouseAge !== undefined
     ? Math.min(primaryAge, spouseAge)
     : primaryAge
-  const youngestAtRetirement = youngestCurrentAge + yearsToRetirement
 
   // ─── Accumulation Phase ───
   const nestEggProjections = nestEggAccounts.map(acct => ({
@@ -186,8 +193,17 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
       youngestBorrowerAge: youngestCurrentAge,
       yearsToRetirement,
       lendingLimitCents,
+      hecmPrincipalLimitCents: homeEquity.hecmPrincipalLimitCents,
+      hecmAdditionalLumpSumCents: homeEquity.hecmAdditionalLumpSumCents,
     })
   }
+
+  // ─── Adjusted Target (mortgage eliminated by HECM payoff) ───
+  const hecmPayoffActive = homeEquity?.hecmPayoffMortgage === true && homeEquity?.hecmPayoutType === 'lump_sum'
+  const mortgagePaymentCents = homeEquity?.existingMortgagePaymentCents ?? 0
+  const adjustedTargetCents = (hecmPayoffActive && mortgagePaymentCents > 0)
+    ? Math.max(0, targetMonthlyIncomeCents - mortgagePaymentCents)
+    : targetMonthlyIncomeCents
 
   // ─── Income by Age ───
   const bucket1MonthlyByAge = buildIncomeByAge(
@@ -223,17 +239,19 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
 
   // ─── Dashboard Numbers ───
   const mortgageFreedCents = hecmResult?.monthlyFreedCents ?? 0
-  const b1AtRetirement = bucket1MonthlyByAge[retirementAge] ?? 0
   const b3Monthly = homeEquity?.hecmPayoutType === 'tenure'
     ? (hecmResult?.tenureMonthlyCents ?? 0)
     : bucket3DrawCents
 
   const totalMonthlyIncomeCents = bucket1DrawCents + bucket2DrawCents + b3Monthly
-  const shortfallCents = Math.max(0, targetMonthlyIncomeCents - totalMonthlyIncomeCents)
-  const surplusCents = Math.max(0, totalMonthlyIncomeCents - targetMonthlyIncomeCents)
+  const shortfallCents = Math.max(0, adjustedTargetCents - totalMonthlyIncomeCents)
+  const surplusCents = Math.max(0, totalMonthlyIncomeCents - adjustedTargetCents)
 
   // ─── Longevity Projection ───
-  const bucket2StartBalance = totalProjectedNestEggCents
+  // Deduct cash-to-close from bucket 2 start balance if needed
+  const cashToClose = hecmResult ? Math.max(0, -hecmResult.availableProceedsCents) : 0
+  const bucket2StartBalance = Math.max(0, totalProjectedNestEggCents - cashToClose)
+
   const bucket2MonthlyDraw = bucket2DrawCents
   const bucket2AnnualRate = nestEggAccounts.length > 0
     ? Math.floor(nestEggAccounts.reduce((s, a) => s + a.rateOfReturnBps, 0) / nestEggAccounts.length)
@@ -254,10 +272,12 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     bucket3StartBalanceCents: bucket3StartBalance,
     bucket3MonthlyDrawCents: bucket3Monthly,
     bucket3LocGrowthRateBps: bucket3LocGrowth,
-    targetMonthlyIncomeCents,
+    targetMonthlyIncomeCents: adjustedTargetCents,
     inflationRateBps,
     survivorEventAge: survivorConfig?.survivorEventAge,
     survivorBucket1MonthlyByAge,
+    bucket2DepositCents,
+    bucket3RepaymentCents,
   })
 
   const depletionAges = findDepletionAges(longevityProjection)
@@ -291,6 +311,8 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
       bucket1MonthlyCents: bucket1DrawCents,
       bucket2MonthlyCents: bucket2DrawCents,
       bucket3MonthlyCents: b3Monthly,
+      grossTargetCents: targetMonthlyIncomeCents,
+      adjustedTargetCents,
     },
     longevityProjection,
     depletionAges,

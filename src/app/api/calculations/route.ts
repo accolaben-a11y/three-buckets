@@ -83,6 +83,8 @@ export async function POST(req: NextRequest) {
           hecmTenureMonthlyCents: client.home_equity.hecm_tenure_monthly_cents,
           hecmLocGrowthRateBps: client.home_equity.hecm_loc_growth_rate_bps,
           hecmPayoffMortgage: client.home_equity.hecm_payoff_mortgage,
+          hecmPrincipalLimitCents: client.home_equity.hecm_principal_limit_cents,
+          hecmAdditionalLumpSumCents: client.home_equity.hecm_additional_lump_sum_cents,
         }
       : null,
     targetMonthlyIncomeCents: scenario.target_monthly_income_cents,
@@ -91,6 +93,8 @@ export async function POST(req: NextRequest) {
     bucket3DrawCents: scenario.bucket3_draw_cents,
     inflationRateBps: scenario.inflation_rate_bps,
     lendingLimitCents: lendingLimit,
+    bucket2DepositCents: scenario.bucket2_deposit_cents,
+    bucket3RepaymentCents: scenario.bucket3_repayment_cents,
     survivorMode: scenario.survivor_mode,
     survivorSpouse: client.survivor_spouse as 'primary' | 'spouse' | undefined,
     survivorEventAge: client.survivor_event_age ?? undefined,

@@ -18,6 +18,9 @@ const updateSchema = z.object({
   planning_horizon_age: z.number().int().optional(),
   notes: z.string().nullable().optional(),
   survivor_mode: z.boolean().optional(),
+  bucket2_deposit_cents: z.number().int().min(0).optional().default(0),
+  bucket2_deposit_account_id: z.string().nullable().optional(),
+  bucket3_repayment_cents: z.number().int().min(0).optional().default(0),
 })
 
 async function getScenarioWithAuth(id: string, userId: string, role: string) {

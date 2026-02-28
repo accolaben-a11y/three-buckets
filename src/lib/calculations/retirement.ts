@@ -51,6 +51,10 @@ export interface RetirementProjectionInput {
   // Survivor event (optional)
   survivorEventAge?: number
   survivorBucket1MonthlyByAge?: Record<number, number>
+
+  // Post-retirement surplus deposits
+  bucket2DepositCents?: number
+  bucket3RepaymentCents?: number
 }
 
 /**
@@ -73,58 +77,18 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
     inflationRateBps,
     survivorEventAge,
     survivorBucket1MonthlyByAge,
+    bucket2DepositCents = 0,
+    bucket3RepaymentCents = 0,
   } = input
 
   const snapshots: YearlySnapshot[] = []
-  const totalMonths = (planningHorizonAge - retirementAge) * 12
-  const inflationMonthlyRate = Math.pow(1 + inflationRateBps / 10000, 1 / 12) - 1
   const nest2MonthlyRate = (bucket2AnnualRateBps / 10000) / 12
   const locMonthlyRate = (bucket3LocGrowthRateBps / 10000) / 12
 
-  let bucket2Balance = bucket2StartBalanceCents
-  let bucket3Balance = bucket3Type === 'loc' ? bucket3StartBalanceCents : 0
-  let currentTargetMonthly = targetMonthlyIncomeCents
-
-  // Accumulate monthly for yearly snapshots
-  const ageMonthlyB1: Record<number, number[]> = {}
-
-  for (let m = 0; m < totalMonths; m++) {
-    const currentAge = retirementAge + Math.floor(m / 12)
-    if (currentAge > planningHorizonAge) break
-
-    // Inflation adjusts target annually
-    if (m > 0 && m % 12 === 0) {
-      for (let i = 0; i < 12; i++) {
-        currentTargetMonthly = Math.floor(currentTargetMonthly * (1 + inflationMonthlyRate))
-      }
-    }
-
-    // Determine active income streams for this age
-    const usesSurvivor = survivorEventAge !== undefined && currentAge >= survivorEventAge
-    const b1Map = usesSurvivor && survivorBucket1MonthlyByAge
-      ? survivorBucket1MonthlyByAge
-      : bucket1MonthlyByAge
-    const b1Income = b1Map[currentAge] ?? 0
-
-    if (!ageMonthlyB1[currentAge]) ageMonthlyB1[currentAge] = []
-    ageMonthlyB1[currentAge].push(b1Income)
-
-    // Bucket 2: grow then draw
-    if (bucket2Balance > 0) {
-      bucket2Balance = Math.floor(bucket2Balance * (1 + nest2MonthlyRate))
-      bucket2Balance = Math.max(0, bucket2Balance - bucket2MonthlyDrawCents)
-    }
-
-    // Bucket 3 LOC: grow then draw
-    if (bucket3Type === 'loc' && bucket3Balance > 0) {
-      bucket3Balance = Math.floor(bucket3Balance * (1 + locMonthlyRate))
-      bucket3Balance = Math.max(0, bucket3Balance - bucket3MonthlyDrawCents)
-    }
-  }
-
   // Build yearly snapshots
   let b2Bal = bucket2StartBalanceCents
-  let b3Bal = bucket3Type === 'loc' ? bucket3StartBalanceCents : 0
+  // Track bucket3 balance for any type that has a starting balance (loc, or lump_sum with converted LOC)
+  let b3Bal = bucket3StartBalanceCents
   let targetMonthly = targetMonthlyIncomeCents
 
   for (let year = 0; year <= planningHorizonAge - retirementAge; year++) {
@@ -147,13 +111,21 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
         b2Bal = Math.floor(b2Bal * (1 + nest2MonthlyRate))
         b2Bal = Math.max(0, b2Bal - bucket2MonthlyDrawCents)
       }
-      if (bucket3Type === 'loc' && b3Bal > 0) {
+      // Track bucket3 LOC balance (applies to 'loc' type and lump_sum with converted LOC)
+      if (b3Bal > 0) {
         b3Bal = Math.floor(b3Bal * (1 + locMonthlyRate))
         b3Bal = Math.max(0, b3Bal - bucket3MonthlyDrawCents)
       }
+      // Surplus deposits applied after draws
+      if (bucket2DepositCents > 0) {
+        b2Bal += bucket2DepositCents
+      }
+      if (bucket3RepaymentCents > 0) {
+        b3Bal += bucket3RepaymentCents
+      }
     }
 
-    const b3Draw = bucket3Type === 'tenure' ? bucket3MonthlyDrawCents : bucket3MonthlyDrawCents
+    const b3Draw = bucket3MonthlyDrawCents
     const totalMonthlyIncome = b1Income + bucket2MonthlyDrawCents + b3Draw
 
     snapshots.push({

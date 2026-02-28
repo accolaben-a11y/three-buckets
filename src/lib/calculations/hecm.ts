@@ -1,7 +1,6 @@
 /**
  * HECM Calculation Logic
  */
-import { calculatePrincipalLimit } from '@/lib/plf-tables'
 import { projectHomeValue } from './accumulation'
 
 export interface HecmCalculationInput {
@@ -17,12 +16,14 @@ export interface HecmCalculationInput {
   youngestBorrowerAge: number
   yearsToRetirement: number
   lendingLimitCents: number
+  hecmPrincipalLimitCents: number
+  hecmAdditionalLumpSumCents: number
 }
 
 export interface HecmResult {
   projectedHomeValueCents: number
   principalLimitCents: number
-  availableProceedsCents: number  // after mortgage payoff if applicable
+  availableProceedsCents: number  // after mortgage payoff if applicable (can be negative = cash to close)
   monthlyFreedCents: number        // mortgage payment freed (if payoff)
   lumpSumAvailableCents: number    // respects 60% rule unless mortgage payoff
   locStartBalanceCents: number
@@ -39,14 +40,14 @@ export function calculateHecm(input: HecmCalculationInput): HecmResult {
     existingMortgageBalanceCents,
     existingMortgagePaymentCents,
     homeAppreciationRateBps,
-    hecmExpectedRateBps,
     hecmPayoutType,
     hecmTenureMonthlysCents,
     hecmLocGrowthRateBps,
     hecmPayoffMortgage,
     youngestBorrowerAge,
     yearsToRetirement,
-    lendingLimitCents,
+    hecmPrincipalLimitCents,
+    hecmAdditionalLumpSumCents,
   } = input
 
   // Project home value at retirement
@@ -56,14 +57,11 @@ export function calculateHecm(input: HecmCalculationInput): HecmResult {
     yearsToRetirement
   )
 
-  // Calculate principal limit at retirement age
+  // Use manually entered principal limit
+  const principalLimitCents = hecmPrincipalLimitCents
+
+  // Retirement age (still needed for LOC projection ages)
   const retirementAge = youngestBorrowerAge + yearsToRetirement
-  const principalLimitCents = calculatePrincipalLimit(
-    projectedHomeValueCents,
-    retirementAge,
-    hecmExpectedRateBps,
-    lendingLimitCents
-  )
 
   // Mortgage payoff logic
   const monthlyFreedCents = (hecmPayoffMortgage && existingMortgagePaymentCents > 0)
@@ -74,7 +72,7 @@ export function calculateHecm(input: HecmCalculationInput): HecmResult {
     ? existingMortgageBalanceCents
     : 0
 
-  // Available proceeds after mortgage payoff
+  // Available proceeds after mortgage payoff (can be negative = cash to close)
   const availableProceedsCents = principalLimitCents - mortgagePayoffAmountCents
 
   // Lump sum: 60% rule applies UNLESS mortgage payoff
@@ -88,14 +86,19 @@ export function calculateHecm(input: HecmCalculationInput): HecmResult {
     lumpSumAvailableCents = Math.min(availableProceedsCents, sixtyPctLimit)
   }
 
-  // LOC starting balance
-  const locStartBalanceCents = hecmPayoutType === 'loc'
-    ? Math.max(0, availableProceedsCents)
-    : 0
+  // LOC starting balance:
+  // - For 'loc' type: full available proceeds
+  // - For 'lump_sum' with positive net proceeds: remainder after additional lump sum draw converts to LOC
+  const locStartBalanceCents =
+    hecmPayoutType === 'loc'
+      ? Math.max(0, availableProceedsCents)
+      : (hecmPayoutType === 'lump_sum' && availableProceedsCents > 0)
+        ? Math.max(0, availableProceedsCents - hecmAdditionalLumpSumCents)
+        : 0
 
   // LOC projections at ages 70, 75, 80, 85
   const locProjections: Array<{ age: number; balanceCents: number }> = []
-  if (hecmPayoutType === 'loc' && locStartBalanceCents > 0) {
+  if (locStartBalanceCents > 0) {
     const locGrowthAnnual = hecmLocGrowthRateBps / 10000
     const projectionAges = [70, 75, 80, 85].filter(a => a > retirementAge)
 

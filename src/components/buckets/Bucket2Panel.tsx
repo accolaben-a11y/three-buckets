@@ -16,6 +16,7 @@ interface Props {
   client: ClientData
   scenario: Scenario
   calcResult: FullCalculationResult | null
+  cashToClose: { accountId: string; amountCents: number } | null
   onUpdate: () => Promise<void>
 }
 
@@ -23,7 +24,7 @@ function formatCents(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents / 100)
 }
 
-export default function Bucket2Panel({ client, scenario, calcResult, onUpdate }: Props) {
+export default function Bucket2Panel({ client, scenario, calcResult, cashToClose, onUpdate }: Props) {
   const [addingAccount, setAddingAccount] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
 
@@ -62,6 +63,7 @@ export default function Bucket2Panel({ client, scenario, calcResult, onUpdate }:
               key={account.id}
               account={account}
               projectedBalance={projection?.projectedBalanceCents}
+              cashToCloseAmount={cashToClose?.accountId === account.id ? cashToClose.amountCents : undefined}
               isEditing={editingId === account.id}
               onEdit={() => setEditingId(account.id)}
               onSave={async (updates) => {
@@ -122,9 +124,10 @@ export default function Bucket2Panel({ client, scenario, calcResult, onUpdate }:
   )
 }
 
-function AccountRow({ account, projectedBalance, isEditing, onEdit, onSave, onDelete, onCancel }: {
+function AccountRow({ account, projectedBalance, cashToCloseAmount, isEditing, onEdit, onSave, onDelete, onCancel }: {
   account: NestEggAccount
   projectedBalance?: number
+  cashToCloseAmount?: number
   isEditing: boolean
   onEdit: () => void
   onSave: (updates: Partial<NestEggAccount>) => Promise<void>
@@ -205,6 +208,12 @@ function AccountRow({ account, projectedBalance, isEditing, onEdit, onSave, onDe
           )}
         </div>
       </div>
+      {cashToCloseAmount !== undefined && (
+        <div className="mt-1.5 flex justify-between text-xs border-t border-red-200 pt-1.5">
+          <span className="text-red-700 font-medium">HECM Cash to Close</span>
+          <span className="text-red-700 font-bold">-{formatCents(cashToCloseAmount)}</span>
+        </div>
+      )}
     </div>
   )
 }

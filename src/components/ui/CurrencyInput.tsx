@@ -5,13 +5,14 @@ interface Props {
   value: number // cents
   onChange: (cents: number) => void
   label?: string
+  helperText?: string
   className?: string
   disabled?: boolean
   min?: number
   placeholder?: string
 }
 
-export default function CurrencyInput({ value, onChange, label, className = '', disabled, min = 0, placeholder }: Props) {
+export default function CurrencyInput({ value, onChange, label, helperText, className = '', disabled, min = 0, placeholder }: Props) {
   const [display, setDisplay] = useState(() => (value / 100).toFixed(0))
 
   useEffect(() => {
@@ -35,6 +36,7 @@ export default function CurrencyInput({ value, onChange, label, className = '', 
   return (
     <div className={`relative ${className}`}>
       {label && <label className="block text-xs font-medium text-slate-600 mb-1">{label}</label>}
+      {helperText && <p className="text-xs text-slate-500 mb-1">{helperText}</p>}
       <div className="relative">
         <span className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 font-medium">$</span>
         <input

@@ -11,6 +11,7 @@ interface ClientData {
   spouse_age: number | null
   target_retirement_age: number
   home_equity: HomeEquityData | null
+  nest_egg_accounts: Array<{ id: string; label: string }>
 }
 
 interface Props {
@@ -44,6 +45,9 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
     hecm_tenure_monthly_cents: he?.hecm_tenure_monthly_cents ?? 0,
     hecm_loc_growth_rate_bps: he?.hecm_loc_growth_rate_bps ?? 600,
     hecm_payoff_mortgage: he?.hecm_payoff_mortgage ?? false,
+    hecm_principal_limit_cents: he?.hecm_principal_limit_cents ?? 0,
+    hecm_additional_lump_sum_cents: he?.hecm_additional_lump_sum_cents ?? 0,
+    hecm_cash_to_close_account_id: he?.hecm_cash_to_close_account_id ?? null as string | null,
   })
   const [saving, setSaving] = useState(false)
   const [dirty, setDirty] = useState(false)
@@ -60,6 +64,9 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
         hecm_tenure_monthly_cents: he.hecm_tenure_monthly_cents,
         hecm_loc_growth_rate_bps: he.hecm_loc_growth_rate_bps,
         hecm_payoff_mortgage: he.hecm_payoff_mortgage,
+        hecm_principal_limit_cents: he.hecm_principal_limit_cents,
+        hecm_additional_lump_sum_cents: he.hecm_additional_lump_sum_cents,
+        hecm_cash_to_close_account_id: he.hecm_cash_to_close_account_id,
       })
     }
   }, [he])
@@ -83,6 +90,12 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
 
   const hasMortgage = form.existing_mortgage_payment_cents > 0
   const showMortgagePayoff = form.hecm_payout_type === 'lump_sum' && hasMortgage
+
+  const netProceeds = hecm?.availableProceedsCents ?? 0
+  const isNetPositive = netProceeds >= 0
+  const additionalLumpSumError = form.hecm_additional_lump_sum_cents > netProceeds
+    ? `Cannot exceed net proceeds of ${formatCents(netProceeds)}`
+    : null
 
   return (
     <div className="p-4 space-y-4">
@@ -155,16 +168,13 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
         <div className="bg-red-50 border border-red-200 rounded-lg p-3 space-y-2">
           <h3 className="text-sm font-semibold text-red-800">HECM Calculation</h3>
 
-          <div className="grid grid-cols-2 gap-3 text-sm">
-            <div>
-              <div className="text-xs text-slate-500">Home Value at Retirement</div>
-              <div className="font-bold text-slate-800">{formatCents(hecm.projectedHomeValueCents)}</div>
-            </div>
-            <div>
-              <div className="text-xs text-slate-500">Principal Limit</div>
-              <div className="font-bold text-slate-800">{formatCents(hecm.principalLimitCents)}</div>
-            </div>
-          </div>
+          {/* Principal Limit — manual input replacing PLF table */}
+          <CurrencyInput
+            label="Principal Limit"
+            value={form.hecm_principal_limit_cents}
+            onChange={v => update('hecm_principal_limit_cents', v)}
+            helperText="Enter the principal limit from HUD tables or your lender quote"
+          />
 
           {/* Lump Sum */}
           {form.hecm_payout_type === 'lump_sum' && (
@@ -183,10 +193,16 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
                   </div>
                 </label>
               )}
+
+              {/* Net Proceeds display — color-coded */}
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <div className="text-xs text-slate-500">Available Net Proceeds</div>
-                  <div className="font-bold text-green-700 text-lg">{formatCents(hecm.lumpSumAvailableCents)}</div>
+                  <div className="text-xs text-slate-500">
+                    {isNetPositive ? 'Available Net Proceeds' : 'Cash to Close Required'}
+                  </div>
+                  <div className={`font-bold text-lg ${isNetPositive ? 'text-green-700' : 'text-red-700'}`}>
+                    {formatCents(Math.abs(netProceeds))}
+                  </div>
                 </div>
                 {hecm.monthlyFreedCents > 0 && (
                   <div>
@@ -195,6 +211,66 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
                   </div>
                 )}
               </div>
+
+              {/* Cash-to-close alert — negative net proceeds */}
+              {!isNetPositive && (
+                <div className="bg-red-100 border border-red-300 rounded-lg p-3 space-y-2">
+                  <p className="text-sm text-red-800 font-medium">
+                    ⚠ Cash to close of {formatCents(Math.abs(netProceeds))} required. Select which Bucket 2 account this will be drawn from.
+                  </p>
+                  {client.nest_egg_accounts.length > 0 && (
+                    <div>
+                      <label className="text-xs font-medium text-slate-600 mb-1 block">Source Account</label>
+                      <select
+                        value={form.hecm_cash_to_close_account_id ?? ''}
+                        onChange={e => update('hecm_cash_to_close_account_id', e.target.value || null)}
+                        className="w-full px-2 py-1.5 border border-slate-300 rounded text-sm text-slate-800 focus:outline-none focus:ring-1 focus:ring-red-500"
+                      >
+                        <option value="">— Select account —</option>
+                        {client.nest_egg_accounts.map(acct => (
+                          <option key={acct.id} value={acct.id}>{acct.label}</option>
+                        ))}
+                      </select>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Positive net proceeds → LOC conversion */}
+              {isNetPositive && netProceeds > 0 && (
+                <div className="space-y-2">
+                  <CurrencyInput
+                    label="Additional Lump Sum Draw"
+                    value={form.hecm_additional_lump_sum_cents}
+                    onChange={v => update('hecm_additional_lump_sum_cents', v)}
+                    helperText="Amount taken as cash at closing before remainder converts to LOC"
+                  />
+                  {additionalLumpSumError && (
+                    <p className="text-xs text-red-600">{additionalLumpSumError}</p>
+                  )}
+                  <div>
+                    <div className="text-xs text-slate-500">Remaining proceeds convert to LOC</div>
+                    <div className="font-bold text-red-700">
+                      {formatCents(Math.max(0, netProceeds - form.hecm_additional_lump_sum_cents))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* LOC projections when lump_sum has converted LOC */}
+              {hecm.locProjections.length > 0 && (
+                <div>
+                  <div className="text-xs font-medium text-slate-600 mb-1">Projected LOC Balance (no draws)</div>
+                  <div className="grid grid-cols-4 gap-2">
+                    {hecm.locProjections.map(p => (
+                      <div key={p.age} className="text-center bg-white rounded border border-red-200 p-1.5">
+                        <div className="text-xs text-slate-500">Age {p.age}</div>
+                        <div className="text-xs font-bold text-red-700">{formatCents(p.balanceCents)}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

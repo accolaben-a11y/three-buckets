@@ -71,6 +71,9 @@ export interface HomeEquityData {
   hecm_tenure_monthly_cents: number
   hecm_loc_growth_rate_bps: number
   hecm_payoff_mortgage: boolean
+  hecm_principal_limit_cents: number
+  hecm_additional_lump_sum_cents: number
+  hecm_cash_to_close_account_id: string | null
 }
 
 export interface Scenario {
@@ -89,6 +92,9 @@ export interface Scenario {
   planning_horizon_age: number
   notes: string | null
   survivor_mode: boolean
+  bucket2_deposit_cents: number
+  bucket2_deposit_account_id: string | null
+  bucket3_repayment_cents: number
 }
 
 export default function ClientPage({ params }: { params: Promise<{ clientId: string }> }) {
@@ -378,6 +384,11 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
                 client={client}
                 scenario={activeScenario}
                 calcResult={calcResult}
+                cashToClose={
+                  client.home_equity?.hecm_cash_to_close_account_id && (calcResult?.hecm?.availableProceedsCents ?? 0) < 0
+                    ? { accountId: client.home_equity.hecm_cash_to_close_account_id, amountCents: Math.abs(calcResult!.hecm!.availableProceedsCents) }
+                    : null
+                }
                 onUpdate={async () => { await loadClient(); await runCalculations() }}
               />
             )}
