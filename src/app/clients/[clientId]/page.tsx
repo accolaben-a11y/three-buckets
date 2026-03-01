@@ -95,6 +95,7 @@ export interface Scenario {
   bucket2_deposit_cents: number
   bucket2_deposit_account_id: string | null
   bucket3_repayment_cents: number
+  transition_events: Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }> | null
 }
 
 export default function ClientPage({ params }: { params: Promise<{ clientId: string }> }) {

@@ -157,6 +157,79 @@ export function buildSurvivorIncomeByAge(
   return result
 }
 
+export interface IncomeSourceMeta {
+  id: string
+  label: string
+  type: string
+}
+
+/**
+ * Build a per-age, per-source monthly income map from income items.
+ * Returns: { byAge: Record<age, { [itemId]: cents }>, sources: IncomeSourceMeta[] }
+ * Mirrors buildIncomeByAge() but tracks amounts per item instead of summing.
+ */
+export function buildIncomeByAgePerSource(
+  items: IncomeItemInput[],
+  retirementAge: number,
+  planningHorizonAge: number,
+  ssPrimaryClaimAge: number,
+  ssSpouseClaimAge: number,
+  survivorConfig?: SurvivorConfig
+): {
+  byAge: Record<number, Record<string, number>>
+  sources: IncomeSourceMeta[]
+} {
+  const byAge: Record<number, Record<string, number>> = {}
+  const nonZeroIds = new Set<string>()
+
+  for (let age = retirementAge; age <= planningHorizonAge; age++) {
+    const ageMap: Record<string, number> = {}
+    for (const item of items) {
+      const effectiveStart = Math.max(item.startAge, retirementAge)
+      const effectiveEnd = item.endAge ?? planningHorizonAge
+
+      if (age < effectiveStart || age > effectiveEnd) {
+        ageMap[item.id] = 0
+        continue
+      }
+
+      if (survivorConfig && age >= survivorConfig.survivorEventAge) {
+        if (survivorConfig.survivorSpouse === 'primary' && item.owner === 'spouse') {
+          if (item.type !== 'pension') { ageMap[item.id] = 0; continue }
+        }
+        if (survivorConfig.survivorSpouse === 'spouse' && item.owner === 'primary') {
+          if (item.type !== 'pension') { ageMap[item.id] = 0; continue }
+        }
+      }
+
+      if (item.type === 'social_security') {
+        const claimAge = item.owner === 'spouse' ? ssSpouseClaimAge : ssPrimaryClaimAge
+        if (age < claimAge) { ageMap[item.id] = 0; continue }
+        if (survivorConfig && age >= survivorConfig.survivorEventAge) { ageMap[item.id] = 0; continue }
+        const amount = getSsMonthlyAmount(item, claimAge)
+        ageMap[item.id] = amount
+        if (amount > 0) nonZeroIds.add(item.id)
+      } else if (item.type === 'pension' && survivorConfig && age >= survivorConfig.survivorEventAge) {
+        const survivorPct = item.pensionSurvivorPct ?? 0
+        const amount = Math.floor(item.monthlyAmountCents * survivorPct / 10000)
+        ageMap[item.id] = amount
+        if (amount > 0) nonZeroIds.add(item.id)
+      } else {
+        ageMap[item.id] = item.monthlyAmountCents
+        if (item.monthlyAmountCents > 0) nonZeroIds.add(item.id)
+      }
+    }
+    byAge[age] = ageMap
+  }
+
+  // Only include sources that had non-zero income in at least one age
+  const sources: IncomeSourceMeta[] = items
+    .filter(item => nonZeroIds.has(item.id))
+    .map(item => ({ id: item.id, label: item.label, type: item.type }))
+
+  return { byAge, sources }
+}
+
 /**
  * Calculate bridge period cost when SS is deferred past retirement age.
  */

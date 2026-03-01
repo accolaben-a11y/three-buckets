@@ -55,6 +55,9 @@ export interface RetirementProjectionInput {
   // Post-retirement surplus deposits
   bucket2DepositCents?: number
   bucket3RepaymentCents?: number
+
+  // Age-triggered one-time reallocation events
+  ageTriggeredEvents?: Record<number, { bucket2Cents: number; bucket3Cents: number }>
 }
 
 /**
@@ -79,6 +82,7 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
     survivorBucket1MonthlyByAge,
     bucket2DepositCents = 0,
     bucket3RepaymentCents = 0,
+    ageTriggeredEvents,
   } = input
 
   const snapshots: YearlySnapshot[] = []
@@ -97,6 +101,12 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
     // Apply inflation to target (per year)
     if (year > 0) {
       targetMonthly = Math.floor(targetMonthly * Math.pow(1 + inflationRateBps / 10000, 1))
+    }
+
+    // Apply age-triggered one-time reallocation events
+    if (ageTriggeredEvents?.[age]) {
+      b2Bal += ageTriggeredEvents[age].bucket2Cents
+      b3Bal += ageTriggeredEvents[age].bucket3Cents
     }
 
     const usesSurvivor = survivorEventAge !== undefined && age >= survivorEventAge

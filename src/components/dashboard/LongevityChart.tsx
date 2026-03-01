@@ -30,7 +30,6 @@ export default function LongevityChart({ data, retirementAge, depletionAges }: P
     'Nest Egg Balance': centsToDisplay(d.bucket2BalanceCents),
     'LOC Balance': d.bucket3BalanceCents > 0 ? centsToDisplay(d.bucket3BalanceCents) : undefined,
     'Target Income': centsToDisplay(d.targetIncomeCents),
-    'Bucket 1 Income': centsToDisplay(d.bucket1IncomeCents),
   }))
 
   return (
@@ -50,9 +49,7 @@ export default function LongevityChart({ data, retirementAge, depletionAges }: P
           />
           <Tooltip
             formatter={(value: number | undefined, name: string | undefined) => [
-              value !== undefined
-                ? ((name ?? '').includes('Income') ? `$${(value / 12).toFixed(0)}/mo` : `$${value.toLocaleString()}`)
-                : '—',
+              value !== undefined ? `$${value.toLocaleString()}` : '—',
               name ?? ''
             ]}
             labelFormatter={(label) => `Age ${label}`}
@@ -81,14 +78,15 @@ export default function LongevityChart({ data, retirementAge, depletionAges }: P
             strokeDasharray="5 5"
           />
 
-          {/* Bucket 1 Income */}
+          {/* Target income (inflation-adjusted) */}
           <Line
             type="monotone"
-            dataKey="Bucket 1 Income"
-            stroke="#16a34a"
-            strokeWidth={2}
+            dataKey="Target Income"
+            stroke="#f59e0b"
+            strokeWidth={1.5}
             dot={false}
-            name="Bucket 1 Income (annual)"
+            name="Target Income"
+            strokeDasharray="3 3"
           />
 
           {/* Depletion reference lines */}

@@ -98,6 +98,7 @@ export async function POST(req: NextRequest) {
     survivorMode: scenario.survivor_mode,
     survivorSpouse: client.survivor_spouse as 'primary' | 'spouse' | undefined,
     survivorEventAge: client.survivor_event_age ?? undefined,
+    transitionEvents: (scenario.transition_events as Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }> | null) ?? undefined,
     globalLocGrowthRateBps: globalSettings?.loc_growth_rate_bps,
   })
 

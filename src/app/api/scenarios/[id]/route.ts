@@ -21,6 +21,11 @@ const updateSchema = z.object({
   bucket2_deposit_cents: z.number().int().min(0).optional().default(0),
   bucket2_deposit_account_id: z.string().nullable().optional(),
   bucket3_repayment_cents: z.number().int().min(0).optional().default(0),
+  transition_events: z.record(z.string(), z.object({
+    bucket2_deposit_cents: z.number().int().min(0),
+    bucket3_repayment_cents: z.number().int().min(0),
+    notes: z.string().optional(),
+  })).nullable().optional(),
 })
 
 async function getScenarioWithAuth(id: string, userId: string, role: string) {
@@ -53,7 +58,8 @@ export async function PUT(req: NextRequest, { params }: { params: Promise<{ id: 
     })
   }
 
-  const updated = await prisma.scenario.update({ where: { id }, data: parsed.data })
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const updated = await prisma.scenario.update({ where: { id }, data: parsed.data as any })
   return NextResponse.json(updated)
 }
 
@@ -80,12 +86,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
 
   const { id: _id, client: _client, created_at, updated_at, ...cloneData } = scenario
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const cloned = await prisma.scenario.create({
     data: {
       ...cloneData,
       name: `${scenario.name} (Copy)`,
       is_active: false,
-    },
+    } as any,
   })
 
   return NextResponse.json(cloned, { status: 201 })

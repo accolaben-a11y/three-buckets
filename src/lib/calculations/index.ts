@@ -3,7 +3,8 @@
  * Combines all bucket calculations into a single result for the dashboard.
  */
 import { projectAccountBalance, projectHomeValue } from './accumulation'
-import { buildIncomeByAge, buildSurvivorIncomeByAge, calculateBridgePeriod } from './income'
+import { buildIncomeByAge, buildSurvivorIncomeByAge, calculateBridgePeriod, buildIncomeByAgePerSource } from './income'
+import type { IncomeSourceMeta } from './income'
 import { calculateHecm } from './hecm'
 import { projectRetirementPhase, findDepletionAges, type YearlySnapshot } from './retirement'
 import type { IncomeItemInput } from './income'
@@ -60,6 +61,9 @@ export interface FullCalculationInput {
   survivorMode: boolean
   survivorSpouse?: 'primary' | 'spouse'
   survivorEventAge?: number
+
+  // Age-triggered reallocation events (keyed by age as string from DB)
+  transitionEvents?: Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }>
 
   // Global defaults
   globalLocGrowthRateBps?: number
@@ -121,6 +125,15 @@ export interface FullCalculationResult {
     bucket2DepletionAge: number | null
     bucket3DepletionAge: number | null
   }
+
+  // Per-source income breakdown for stacked bar chart
+  incomeByAgePerSource: {
+    byAge: Record<number, Record<string, number>>
+    sources: IncomeSourceMeta[]
+  }
+
+  // Ages where bucket1 income steps up (SS kicks in, etc.)
+  transitionAges: number[]
 }
 
 export function runFullCalculation(input: FullCalculationInput): FullCalculationResult {
@@ -145,6 +158,7 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     survivorMode,
     survivorSpouse,
     survivorEventAge,
+    transitionEvents,
     globalLocGrowthRateBps = 600,
   } = input
 
@@ -214,6 +228,14 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     ssSpouseClaimAge
   )
 
+  const incomeByAgePerSource = buildIncomeByAgePerSource(
+    incomeItems,
+    retirementAge,
+    planningHorizonAge,
+    ssPrimaryClaimAge,
+    ssSpouseClaimAge
+  )
+
   const survivorConfig = (survivorMode && survivorSpouse && survivorEventAge)
     ? { survivorEventAge, survivorSpouse }
     : undefined
@@ -237,13 +259,25 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     ssSpouseClaimAge
   )
 
+  // ─── Age-Triggered Events ───
+  const ageTriggeredEvents: Record<number, { bucket2Cents: number; bucket3Cents: number }> | undefined =
+    transitionEvents
+      ? Object.fromEntries(
+          Object.entries(transitionEvents).map(([ageStr, ev]) => [
+            Number(ageStr),
+            { bucket2Cents: ev.bucket2_deposit_cents, bucket3Cents: ev.bucket3_repayment_cents },
+          ])
+        )
+      : undefined
+
   // ─── Dashboard Numbers ───
   const mortgageFreedCents = hecmResult?.monthlyFreedCents ?? 0
   const b3Monthly = homeEquity?.hecmPayoutType === 'tenure'
     ? (hecmResult?.tenureMonthlyCents ?? 0)
     : bucket3DrawCents
 
-  const totalMonthlyIncomeCents = bucket1DrawCents + bucket2DrawCents + b3Monthly
+  const b1AtRetirement = bucket1MonthlyByAge[retirementAge] ?? 0
+  const totalMonthlyIncomeCents = b1AtRetirement + bucket2DrawCents + b3Monthly
   const shortfallCents = Math.max(0, adjustedTargetCents - totalMonthlyIncomeCents)
   const surplusCents = Math.max(0, totalMonthlyIncomeCents - adjustedTargetCents)
 
@@ -278,9 +312,18 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     survivorBucket1MonthlyByAge,
     bucket2DepositCents,
     bucket3RepaymentCents,
+    ageTriggeredEvents,
   })
 
   const depletionAges = findDepletionAges(longevityProjection)
+
+  // Compute ages where bucket1 income changes (SS kicks in, wage ends, etc.)
+  const transitionAges: number[] = []
+  for (let i = 1; i < longevityProjection.length; i++) {
+    if (longevityProjection[i].bucket1IncomeCents !== longevityProjection[i - 1].bucket1IncomeCents) {
+      transitionAges.push(longevityProjection[i].age)
+    }
+  }
 
   return {
     accumulationPhase: {
@@ -308,7 +351,7 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
       totalMonthlyIncomeCents,
       shortfallCents,
       surplusCents,
-      bucket1MonthlyCents: bucket1DrawCents,
+      bucket1MonthlyCents: b1AtRetirement,
       bucket2MonthlyCents: bucket2DrawCents,
       bucket3MonthlyCents: b3Monthly,
       grossTargetCents: targetMonthlyIncomeCents,
@@ -316,6 +359,8 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     },
     longevityProjection,
     depletionAges,
+    incomeByAgePerSource,
+    transitionAges,
   }
 }
 
@@ -323,4 +368,4 @@ export type { YearlySnapshot }
 export { projectAccountBalance, projectHomeValue } from './accumulation'
 export { calculateHecm } from './hecm'
 export { buildIncomeByAge, calculateBridgePeriod } from './income'
-export type { IncomeItemInput } from './income'
+export type { IncomeItemInput, IncomeSourceMeta } from './income'

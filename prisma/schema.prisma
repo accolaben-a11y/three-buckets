@@ -122,6 +122,7 @@ model Scenario {
   bucket2_deposit_cents       Int           @default(0)
   bucket2_deposit_account_id  String?
   bucket3_repayment_cents     Int           @default(0)
+  transition_events           Json?
   created_at                  DateTime      @default(now())
   updated_at                  DateTime      @updatedAt
 

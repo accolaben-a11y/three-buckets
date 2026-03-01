@@ -2,6 +2,9 @@
 import { useState, useCallback } from 'react'
 import CurrencyInput from '@/components/ui/CurrencyInput'
 import LongevityChart from './LongevityChart'
+import Bucket1Summary from './Bucket1Summary'
+import Bucket1IncomeChart from './Bucket1IncomeChart'
+import TransitionEventsPanel from './TransitionEventsPanel'
 import type { Scenario } from '@/app/clients/[clientId]/page'
 import type { FullCalculationResult } from '@/lib/calculations'
 
@@ -65,17 +68,6 @@ export default function CashFlowDashboard({
 
   const allocatedDeposits = (scenario.bucket2_deposit_cents ?? 0) + (scenario.bucket3_repayment_cents ?? 0)
   const unallocatedSurplus = Math.max(0, surplus - allocatedDeposits)
-
-  const b1Max = client.income_items.reduce((sum, item) => {
-    if (item.type === 'social_security') {
-      const claimAge = scenario.ss_primary_claim_age
-      const amount = claimAge === 62 ? item.ss_age62_cents
-        : claimAge === 70 ? item.ss_age70_cents
-        : item.ss_age67_cents
-      return sum + (amount ?? item.monthly_amount_cents)
-    }
-    return sum + item.monthly_amount_cents
-  }, 0)
 
   const b2Max = client.nest_egg_accounts.reduce((s, a) => s + a.monthly_draw_cents, 0)
 
@@ -179,17 +171,11 @@ export default function CashFlowDashboard({
         )}
       </div>
 
-      {/* ── THREE BUCKET SLIDERS ── */}
-      <div className="grid grid-cols-3 gap-3">
-        <BucketSlider
-          bucket={1}
-          label="Bucket 1 — Income"
-          color="green"
-          value={scenario.bucket1_draw_cents}
-          maxValue={Math.max(b1Max, scenario.bucket1_draw_cents)}
-          onChange={v => updateDraw(1, v)}
-          depletionAge={null}
-        />
+      {/* ── BUCKET 1 READ-ONLY SUMMARY ── */}
+      <Bucket1Summary calcResult={calcResult} calcLoading={calcLoading} />
+
+      {/* ── BUCKET 2 + 3 SLIDERS ── */}
+      <div className="grid grid-cols-2 gap-3">
         <BucketSlider
           bucket={2}
           label="Bucket 2 — Nest Egg"
@@ -238,6 +224,28 @@ export default function CashFlowDashboard({
         <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2.5 text-sm text-red-700">
           ⚠ Bucket 3 (Home Equity LOC) depletes at age {depletionAges.bucket3DepletionAge}. Reallocate draw to continue meeting income target.
         </div>
+      )}
+
+      {/* ── BUCKET 1 INCOME BY AGE ── */}
+      {calcResult && calcResult.incomeByAgePerSource.sources.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 className="font-semibold text-slate-700 mb-3">Bucket 1 — Income by Age</h3>
+          <Bucket1IncomeChart
+            incomeByAgePerSource={calcResult.incomeByAgePerSource}
+            retirementAge={client.target_retirement_age}
+            planningHorizonAge={scenario.planning_horizon_age}
+          />
+        </div>
+      )}
+
+      {/* ── TRANSITION EVENTS ── */}
+      {calcResult && calcResult.transitionAges.length > 0 && (
+        <TransitionEventsPanel
+          transitionAges={calcResult.transitionAges}
+          calcResult={calcResult}
+          scenario={scenario}
+          onScenarioUpdate={onScenarioUpdate}
+        />
       )}
 
       {/* ── LONGEVITY CHART ── */}
