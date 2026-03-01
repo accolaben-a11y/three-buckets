@@ -37,6 +37,8 @@ model Client {
   model_survivor        Boolean          @default(false)
   survivor_spouse       SurvivorSpouse?
   survivor_event_age    Int?
+  deleted_at            DateTime?
+  deleted_by            String?
   created_at            DateTime         @default(now())
   updated_at            DateTime         @updatedAt
   income_items          IncomeItem[]

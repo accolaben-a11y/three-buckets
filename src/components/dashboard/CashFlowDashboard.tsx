@@ -1,5 +1,5 @@
 'use client'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useRef } from 'react'
 import CurrencyInput from '@/components/ui/CurrencyInput'
 import LongevityChart from './LongevityChart'
 import Bucket1Summary from './Bucket1Summary'
@@ -37,7 +37,6 @@ interface Props {
   calcLoading: boolean
   survivorMode: boolean
   onScenarioUpdate: (updates: Partial<Scenario>) => Promise<void>
-  onExportPDF: () => void
 }
 
 function formatCents(cents: number) {
@@ -45,9 +44,49 @@ function formatCents(cents: number) {
 }
 
 export default function CashFlowDashboard({
-  client, scenario, calcResult, calcLoading, survivorMode, onScenarioUpdate, onExportPDF
+  client, scenario, calcResult, calcLoading, survivorMode, onScenarioUpdate
 }: Props) {
   const [editingTarget, setEditingTarget] = useState(false)
+  const [pdfLoading, setPdfLoading] = useState(false)
+  const bucket1ChartRef = useRef<HTMLDivElement>(null)
+  const longevityChartRef = useRef<HTMLDivElement>(null)
+
+  async function handleExportPDF() {
+    if (!scenario || pdfLoading) return
+    setPdfLoading(true)
+    try {
+      const html2canvas = (await import('html2canvas')).default
+      // Wait for chart animations
+      await new Promise(r => setTimeout(r, 1000))
+      let bucket1ChartImage: string | null = null
+      let longevityChartImage: string | null = null
+      if (bucket1ChartRef.current) {
+        const canvas = await html2canvas(bucket1ChartRef.current, { scale: 2, useCORS: true })
+        bucket1ChartImage = canvas.toDataURL('image/png')
+      }
+      if (longevityChartRef.current) {
+        const canvas = await html2canvas(longevityChartRef.current, { scale: 2, useCORS: true })
+        longevityChartImage = canvas.toDataURL('image/png')
+      }
+      const res = await fetch(`/api/pdf/${client.id}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ scenarioId: scenario.id, bucket1ChartImage, longevityChartImage }),
+      })
+      if (res.ok) {
+        const blob = await res.blob()
+        const url = URL.createObjectURL(blob)
+        const a = document.createElement('a')
+        a.href = url
+        const today = new Date().toISOString().slice(0, 10)
+        a.download = `${client.last_name}_${client.first_name}_RetirementPlan_${today}.pdf`
+        a.click()
+        URL.revokeObjectURL(url)
+      }
+    } finally {
+      setPdfLoading(false)
+    }
+  }
 
   const grossTargetCents = calcResult?.dashboard.grossTargetCents ?? scenario.target_monthly_income_cents
   const adjustedTargetCents = calcResult?.dashboard.adjustedTargetCents ?? scenario.target_monthly_income_cents
@@ -93,6 +132,28 @@ export default function CashFlowDashboard({
 
   return (
     <div className="p-5 space-y-4">
+      {/* ── HIDDEN CHART CAPTURE CONTAINERS ── */}
+      <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }}>
+        <div ref={bucket1ChartRef} style={{ width: 900, height: 400, background: '#fff', padding: 16 }}>
+          {calcResult && calcResult.incomeByAgePerSource.sources.length > 0 && (
+            <Bucket1IncomeChart
+              incomeByAgePerSource={calcResult.incomeByAgePerSource}
+              retirementAge={client.target_retirement_age}
+              planningHorizonAge={scenario.planning_horizon_age}
+            />
+          )}
+        </div>
+        <div ref={longevityChartRef} style={{ width: 900, height: 400, background: '#fff', padding: 16 }}>
+          {calcResult && calcResult.longevityProjection.length > 0 && (
+            <LongevityChart
+              data={calcResult.longevityProjection}
+              retirementAge={client.target_retirement_age}
+              depletionAges={calcResult.depletionAges}
+            />
+          )}
+        </div>
+      </div>
+
       {/* ── BEFORE/AFTER MORTGAGE BANNER ── */}
       {showMortgageBanner && (
         <div className="rounded-xl overflow-hidden border border-slate-200 shadow-sm">
@@ -309,13 +370,14 @@ export default function CashFlowDashboard({
       {/* ── EXPORT PDF ── */}
       <div className="flex justify-end pb-4">
         <button
-          onClick={onExportPDF}
-          className="bg-slate-800 hover:bg-slate-900 text-white px-5 py-2.5 rounded-lg font-semibold flex items-center gap-2 text-sm transition-colors"
+          onClick={handleExportPDF}
+          disabled={pdfLoading}
+          className="bg-slate-800 hover:bg-slate-900 disabled:bg-slate-500 text-white px-5 py-2.5 rounded-lg font-semibold flex items-center gap-2 text-sm transition-colors"
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
           </svg>
-          Export PDF Report
+          {pdfLoading ? 'Generating PDF…' : 'Export PDF Report'}
         </button>
       </div>
     </div>

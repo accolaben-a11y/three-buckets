@@ -5,13 +5,17 @@ import prisma from '@/lib/db'
 import { runFullCalculation } from '@/lib/calculations'
 import type { IncomeItemInput } from '@/lib/calculations/income'
 
-export async function GET(req: NextRequest, { params }: { params: Promise<{ clientId: string }> }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ clientId: string }> }) {
   const { clientId } = await params
   const session = await getServerSession(authOptions)
   if (!session) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
 
-  const { searchParams } = new URL(req.url)
-  const scenarioId = searchParams.get('scenarioId')
+  const body = await req.json()
+  const { scenarioId, bucket1ChartImage, longevityChartImage } = body as {
+    scenarioId?: string
+    bucket1ChartImage?: string
+    longevityChartImage?: string
+  }
 
   const client = await prisma.client.findUnique({
     where: { id: clientId },
@@ -25,6 +29,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ clie
   })
 
   if (!client) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (client.deleted_at !== null) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   if (session.user.role !== 'admin' && client.advisor_id !== session.user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
@@ -94,10 +99,19 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ clie
     survivorMode: scenario.survivor_mode,
     survivorSpouse: client.survivor_spouse as 'primary' | 'spouse' | undefined,
     survivorEventAge: client.survivor_event_age ?? undefined,
+    transitionEvents: (scenario.transition_events as Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }> | null) ?? undefined,
   })
 
-  // Generate PDF using dynamic import to avoid SSR issues
+  // Build income source labels map from calcResult
+  const incomeSourceLabels: Record<string, string> = {}
+  for (const src of calcResult.incomeByAgePerSource.sources) {
+    incomeSourceLabels[src.id] = src.label
+  }
+
   const { generatePDF } = await import('@/lib/pdf-generator')
+
+  const today = new Date()
+  const dateStr = today.toISOString().slice(0, 10)
 
   const pdfBytes = await generatePDF({
     client: {
@@ -124,26 +138,41 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ clie
       inflation_rate_bps: scenario.inflation_rate_bps,
       planning_horizon_age: scenario.planning_horizon_age,
       notes: scenario.notes,
+      transition_events: scenario.transition_events as Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }> | null,
+      bucket2_deposit_cents: scenario.bucket2_deposit_cents,
+      bucket3_repayment_cents: scenario.bucket3_repayment_cents,
     },
     incomeItems: client.income_items.map(i => ({
       label: i.label,
       type: i.type,
+      owner: i.owner,
       monthly_amount_cents: i.monthly_amount_cents,
       start_age: i.start_age,
       end_age: i.end_age,
+      ss_age62_cents: i.ss_age62_cents,
+      ss_age67_cents: i.ss_age67_cents,
+      ss_age70_cents: i.ss_age70_cents,
+      ss_claim_age: i.ss_claim_age,
     })),
     nestEggAccounts: client.nest_egg_accounts.map(a => ({
       label: a.label,
       account_type: a.account_type,
       current_balance_cents: a.current_balance_cents,
+      monthly_contribution_cents: a.monthly_contribution_cents,
       monthly_draw_cents: a.monthly_draw_cents,
       rate_of_return_bps: a.rate_of_return_bps,
     })),
     homeEquity: client.home_equity ? {
       current_home_value_cents: client.home_equity.current_home_value_cents,
+      existing_mortgage_balance_cents: client.home_equity.existing_mortgage_balance_cents,
       existing_mortgage_payment_cents: client.home_equity.existing_mortgage_payment_cents,
       hecm_payout_type: client.home_equity.hecm_payout_type,
       hecm_payoff_mortgage: client.home_equity.hecm_payoff_mortgage,
+      hecm_loc_growth_rate_bps: client.home_equity.hecm_loc_growth_rate_bps,
+      hecm_expected_rate_bps: client.home_equity.hecm_expected_rate_bps,
+      hecm_principal_limit_cents: client.home_equity.hecm_principal_limit_cents,
+      hecm_tenure_monthly_cents: client.home_equity.hecm_tenure_monthly_cents,
+      hecm_additional_lump_sum_cents: client.home_equity.hecm_additional_lump_sum_cents,
     } : null,
     calcResult,
     globalSettings: {
@@ -152,14 +181,18 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ clie
       loc_growth_rate_bps: globalSettings?.loc_growth_rate_bps ?? 600,
       hecm_lending_limit_cents: lendingLimit,
     },
-    generatedDate: new Date().toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+    generatedDate: today.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' }),
+    transitionAges: calcResult.transitionAges,
+    incomeSourceLabels,
+    bucket1ChartImage: bucket1ChartImage ?? null,
+    longevityChartImage: longevityChartImage ?? null,
   })
 
   const blob = new Blob([pdfBytes.buffer as ArrayBuffer], { type: 'application/pdf' })
   return new NextResponse(blob, {
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': `attachment; filename="${client.last_name}_${client.first_name}_Retirement_Plan.pdf"`,
+      'Content-Disposition': `attachment; filename="${client.last_name}_${client.first_name}_RetirementPlan_${dateStr}.pdf"`,
     },
   })
 }

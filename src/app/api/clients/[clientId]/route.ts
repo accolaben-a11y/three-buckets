@@ -28,6 +28,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ clie
   })
 
   if (!client) return NextResponse.json({ error: 'Not found' }, { status: 404 })
+  if (client.deleted_at !== null) return NextResponse.json({ error: 'Not found' }, { status: 404 })
   if (session.user.role !== 'admin' && client.advisor_id !== session.user.id) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
   }
@@ -78,6 +79,9 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ c
   const existing = await getClientWithAuth(clientId, session.user.id, session.user.role)
   if (!existing) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
-  await prisma.client.delete({ where: { id: clientId } })
+  await prisma.client.update({
+    where: { id: clientId },
+    data: { deleted_at: new Date(), deleted_by: session.user.id },
+  })
   return NextResponse.json({ success: true })
 }

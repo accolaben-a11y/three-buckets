@@ -27,8 +27,8 @@ export async function GET(req: NextRequest) {
   const advisorFilter = searchParams.get('advisor_id')
 
   const where = session.user.role === 'admin'
-    ? (advisorFilter ? { advisor_id: advisorFilter } : {})
-    : { advisor_id: session.user.id }
+    ? (advisorFilter ? { advisor_id: advisorFilter, deleted_at: null } : { deleted_at: null })
+    : { advisor_id: session.user.id, deleted_at: null }
 
   const clients = await prisma.client.findMany({
     where,

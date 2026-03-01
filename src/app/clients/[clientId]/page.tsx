@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect, useCallback, use } from 'react'
+import { useState, useEffect, useCallback, use, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { signOut, useSession } from 'next-auth/react'
@@ -7,6 +7,7 @@ import Bucket1Panel from '@/components/buckets/Bucket1Panel'
 import Bucket2Panel from '@/components/buckets/Bucket2Panel'
 import Bucket3Panel from '@/components/buckets/Bucket3Panel'
 import CashFlowDashboard from '@/components/dashboard/CashFlowDashboard'
+import Modal from '@/components/ui/Modal'
 import type { FullCalculationResult } from '@/lib/calculations'
 
 interface ClientData {
@@ -112,6 +113,17 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
   const [scenarioName, setScenarioName] = useState('')
   const [editingName, setEditingName] = useState(false)
   const [survivorMode, setSurvivorMode] = useState(false)
+  const [deletingClient, setDeletingClient] = useState(false)
+  const [overflowOpen, setOverflowOpen] = useState(false)
+  const overflowRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (overflowRef.current && !overflowRef.current.contains(e.target as Node)) setOverflowOpen(false)
+    }
+    if (overflowOpen) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [overflowOpen])
 
   const loadClient = useCallback(async () => {
     const res = await fetch(`/api/clients/${clientId}`)
@@ -189,18 +201,9 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
     }
   }
 
-  async function exportPDF() {
-    if (!activeScenario) return
-    const res = await fetch(`/api/pdf/${clientId}?scenarioId=${activeScenario.id}`)
-    if (res.ok) {
-      const blob = await res.blob()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${client?.last_name}_${client?.first_name}_Retirement_Plan.pdf`
-      a.click()
-      URL.revokeObjectURL(url)
-    }
+  async function handleDeleteClient() {
+    const res = await fetch(`/api/clients/${clientId}`, { method: 'DELETE' })
+    if (res.ok) router.push('/clients')
   }
 
   async function toggleSurvivor() {
@@ -327,6 +330,28 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
           <button onClick={cloneScenario} className="text-slate-400 hover:text-white text-xs px-2 py-1 rounded border border-slate-700 hover:border-slate-500">
             Clone
           </button>
+          {/* Overflow menu */}
+          <div ref={overflowRef} className="relative">
+            <button
+              onClick={() => setOverflowOpen(v => !v)}
+              className="text-slate-400 hover:text-white p-1 rounded"
+              title="More options"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+              </svg>
+            </button>
+            {overflowOpen && (
+              <div className="absolute right-0 top-8 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 min-w-[150px]">
+                <button
+                  onClick={() => { setOverflowOpen(false); setDeletingClient(true) }}
+                  className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+                >
+                  Delete Client
+                </button>
+              </div>
+            )}
+          </div>
           <button
             onClick={() => signOut({ callbackUrl: '/login' })}
             className="text-slate-500 hover:text-slate-300 text-xs ml-2"
@@ -412,13 +437,12 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
             calcLoading={calcLoading}
             survivorMode={survivorMode}
             onScenarioUpdate={saveScenario}
-            onExportPDF={exportPDF}
           />
         </div>
       </div>
 
       {/* ── FOOTER ── */}
-      <footer className="bg-white border-t border-slate-200 px-6 py-2 flex items-center justify-between text-xs text-slate-500 shrink-0">
+      <footer className="bg-white border-t border-slate-200 px-6 py-2 flex items-center text-xs text-slate-500 shrink-0">
         <div className="flex gap-4">
           <span>Inflation: {(activeScenario.inflation_rate_bps / 100).toFixed(1)}%</span>
           <span>Planning to age: {activeScenario.planning_horizon_age}</span>
@@ -429,18 +453,30 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
             </>
           )}
         </div>
+      </footer>
+
+      {/* Delete Client Modal */}
+      <Modal open={deletingClient} onClose={() => setDeletingClient(false)} title="Delete Client Profile" size="sm">
+        <p className="text-slate-600 text-sm mb-6">
+          Are you sure you want to delete <span className="font-semibold">{client.first_name} {client.last_name}</span>?
+          This action will remove them from your client list. Contact your administrator if you need to recover this record.
+        </p>
         <div className="flex gap-3">
           <button
-            onClick={exportPDF}
-            className="bg-slate-800 hover:bg-slate-900 text-white px-4 py-1.5 rounded font-medium flex items-center gap-1.5"
+            autoFocus
+            onClick={() => setDeletingClient(false)}
+            className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg hover:bg-slate-50 font-medium"
           >
-            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-            </svg>
-            Export PDF
+            Cancel
+          </button>
+          <button
+            onClick={handleDeleteClient}
+            className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg font-semibold"
+          >
+            Delete Client
           </button>
         </div>
-      </footer>
+      </Modal>
     </div>
   )
 }

@@ -25,18 +25,31 @@ interface Settings {
   session_timeout_minutes: number
 }
 
+interface DeletedClient {
+  id: string
+  first_name: string
+  last_name: string
+  deleted_at: string
+  deleted_by: string | null
+  deleted_by_name: string | null
+  advisor: { full_name: string }
+}
+
 export default function AdminPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [users, setUsers] = useState<User[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
-  const [activeTab, setActiveTab] = useState<'users' | 'settings'>('users')
+  const [deletedClients, setDeletedClients] = useState<DeletedClient[]>([])
+  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'deleted'>('users')
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState<User | null>(null)
   const [saving, setSaving] = useState(false)
   const [newUser, setNewUser] = useState({ email: '', password: '', full_name: '', contact_info: '', role: 'advisor' })
   const [editUser, setEditUser] = useState({ full_name: '', contact_info: '', is_active: true, password: '' })
   const [settingsForm, setSettingsForm] = useState<Settings | null>(null)
+  const [permanentDeleteTarget, setPermanentDeleteTarget] = useState<DeletedClient | null>(null)
+  const [permanentDeleteInput, setPermanentDeleteInput] = useState('')
 
   useEffect(() => {
     if (session?.user.role !== 'admin') { router.push('/clients'); return }
@@ -44,9 +57,10 @@ export default function AdminPage() {
   }, [session, router])
 
   async function loadData() {
-    const [usersRes, settingsRes] = await Promise.all([
+    const [usersRes, settingsRes, deletedRes] = await Promise.all([
       fetch('/api/admin/users'),
       fetch('/api/admin/settings'),
+      fetch('/api/admin/clients'),
     ])
     if (usersRes.ok) setUsers(await usersRes.json())
     if (settingsRes.ok) {
@@ -54,6 +68,20 @@ export default function AdminPage() {
       setSettings(s)
       setSettingsForm(s)
     }
+    if (deletedRes.ok) setDeletedClients(await deletedRes.json())
+  }
+
+  async function restoreClient(id: string) {
+    await fetch(`/api/admin/clients/${id}`, { method: 'POST' })
+    await loadData()
+  }
+
+  async function permanentDeleteClient() {
+    if (!permanentDeleteTarget) return
+    await fetch(`/api/admin/clients/${permanentDeleteTarget.id}`, { method: 'DELETE' })
+    setPermanentDeleteTarget(null)
+    setPermanentDeleteInput('')
+    await loadData()
   }
 
   async function createUser() {
@@ -120,6 +148,7 @@ export default function AdminPage() {
           {[
             { key: 'users', label: 'Advisor Accounts' },
             { key: 'settings', label: 'Global Settings' },
+            { key: 'deleted', label: `Deleted Clients${deletedClients.length > 0 ? ` (${deletedClients.length})` : ''}` },
           ].map(tab => (
             <button
               key={tab.key}
@@ -265,7 +294,94 @@ export default function AdminPage() {
             </div>
           </div>
         )}
+
+        {/* Deleted Clients Tab */}
+        {activeTab === 'deleted' && (
+          <div>
+            <h2 className="text-xl font-bold text-slate-800 mb-4">Deleted Clients ({deletedClients.length})</h2>
+            {deletedClients.length === 0 ? (
+              <div className="text-slate-500 text-sm">No deleted clients.</div>
+            ) : (
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+                <table className="w-full">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-xs font-semibold text-slate-500 uppercase tracking-wide">
+                      <th className="text-left px-6 py-3">Client Name</th>
+                      <th className="text-left px-4 py-3">Advisor</th>
+                      <th className="text-left px-4 py-3">Deleted By</th>
+                      <th className="text-left px-4 py-3">Deleted At</th>
+                      <th className="px-4 py-3" />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100">
+                    {deletedClients.map(client => (
+                      <tr key={client.id} className="hover:bg-slate-50">
+                        <td className="px-6 py-3 font-medium text-slate-800">{client.first_name} {client.last_name}</td>
+                        <td className="px-4 py-3 text-slate-600 text-sm">{client.advisor.full_name}</td>
+                        <td className="px-4 py-3 text-slate-600 text-sm">{client.deleted_by_name ?? '—'}</td>
+                        <td className="px-4 py-3 text-slate-500 text-sm">
+                          {new Date(client.deleted_at).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3">
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => restoreClient(client.id)}
+                              className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                            >
+                              Restore
+                            </button>
+                            <button
+                              onClick={() => { setPermanentDeleteTarget(client); setPermanentDeleteInput('') }}
+                              className="text-red-600 hover:text-red-800 text-sm"
+                            >
+                              Delete Permanently
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+        )}
       </main>
+
+      {/* Permanent Delete Confirmation Modal */}
+      <Modal open={!!permanentDeleteTarget} onClose={() => { setPermanentDeleteTarget(null); setPermanentDeleteInput('') }} title="Permanently Delete Client" size="sm">
+        {permanentDeleteTarget && (
+          <div className="space-y-4">
+            <p className="text-slate-600 text-sm">
+              This will permanently delete all data for <span className="font-semibold">{permanentDeleteTarget.first_name} {permanentDeleteTarget.last_name}</span> and cannot be undone.
+              Type the client&apos;s name to confirm.
+            </p>
+            <input
+              type="text"
+              value={permanentDeleteInput}
+              onChange={e => setPermanentDeleteInput(e.target.value)}
+              placeholder={`${permanentDeleteTarget.first_name} ${permanentDeleteTarget.last_name}`}
+              className="w-full px-4 py-2 border border-slate-300 rounded-lg text-slate-800 focus:outline-none focus:ring-2 focus:ring-red-500"
+            />
+            <div className="flex gap-3">
+              <button
+                autoFocus
+                onClick={() => { setPermanentDeleteTarget(null); setPermanentDeleteInput('') }}
+                className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg hover:bg-slate-50 font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={permanentDeleteClient}
+                disabled={permanentDeleteInput !== `${permanentDeleteTarget.first_name} ${permanentDeleteTarget.last_name}`}
+                className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-red-300 text-white py-2 rounded-lg font-semibold"
+              >
+                Delete Permanently
+              </button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* Create User Modal */}
       <Modal open={showCreateModal} onClose={() => setShowCreateModal(false)} title="Create New Advisor Account">

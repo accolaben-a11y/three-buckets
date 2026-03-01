@@ -1,8 +1,9 @@
 'use client'
 import { useSession, signOut } from 'next-auth/react'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
+import Modal from '@/components/ui/Modal'
 
 interface Client {
   id: string
@@ -17,6 +18,86 @@ interface Client {
   scenarios: { name: string }[]
 }
 
+function DeleteClientModal({ client, onClose, onDeleted }: {
+  client: Client
+  onClose: () => void
+  onDeleted: (id: string) => void
+}) {
+  const [deleting, setDeleting] = useState(false)
+
+  async function handleDelete() {
+    setDeleting(true)
+    const res = await fetch(`/api/clients/${client.id}`, { method: 'DELETE' })
+    if (res.ok) {
+      onDeleted(client.id)
+      onClose()
+    }
+    setDeleting(false)
+  }
+
+  return (
+    <Modal open onClose={onClose} title="Delete Client Profile" size="sm">
+      <p className="text-slate-600 text-sm mb-6">
+        Are you sure you want to delete <span className="font-semibold">{client.first_name} {client.last_name}</span>?
+        This action will remove them from your client list. Contact your administrator if you need to recover this record.
+      </p>
+      <div className="flex gap-3">
+        <button
+          autoFocus
+          onClick={onClose}
+          className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg hover:bg-slate-50 font-medium"
+        >
+          Cancel
+        </button>
+        <button
+          onClick={handleDelete}
+          disabled={deleting}
+          className="flex-1 bg-red-600 hover:bg-red-700 disabled:bg-red-400 text-white py-2 rounded-lg font-semibold"
+        >
+          {deleting ? 'Deleting…' : 'Delete Client'}
+        </button>
+      </div>
+    </Modal>
+  )
+}
+
+function OverflowMenu({ onDelete }: { onDelete: () => void }) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    function handleClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    if (open) document.addEventListener('mousedown', handleClick)
+    return () => document.removeEventListener('mousedown', handleClick)
+  }, [open])
+
+  return (
+    <div ref={ref} className="relative" onClick={e => e.stopPropagation()}>
+      <button
+        onClick={e => { e.stopPropagation(); setOpen(v => !v) }}
+        className="p-1.5 rounded hover:bg-slate-200 text-slate-500 hover:text-slate-700"
+        title="More options"
+      >
+        <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+          <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
+        </svg>
+      </button>
+      {open && (
+        <div className="absolute right-0 top-8 bg-white border border-slate-200 rounded-lg shadow-lg py-1 z-20 min-w-[140px]">
+          <button
+            onClick={() => { setOpen(false); onDelete() }}
+            className="w-full text-left px-4 py-2 text-sm text-red-600 hover:bg-red-50"
+          >
+            Delete Client
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function ClientsPage() {
   const { data: session } = useSession()
   const router = useRouter()
@@ -24,6 +105,7 @@ export default function ClientsPage() {
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [sortBy, setSortBy] = useState<'name' | 'updated'>('updated')
+  const [deletingClient, setDeletingClient] = useState<Client | null>(null)
 
   useEffect(() => {
     fetch('/api/clients')
@@ -146,6 +228,7 @@ export default function ClientsPage() {
                   {session?.user.role === 'admin' && (
                     <th className="text-left px-4 py-3 text-xs font-semibold text-slate-500 uppercase tracking-wide">Advisor</th>
                   )}
+                  <th className="px-4 py-3 w-10" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -175,6 +258,9 @@ export default function ClientsPage() {
                     {session?.user.role === 'admin' && (
                       <td className="px-4 py-4 text-slate-500 text-sm">{client.advisor.full_name}</td>
                     )}
+                    <td className="px-4 py-4">
+                      <OverflowMenu onDelete={() => setDeletingClient(client)} />
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -182,6 +268,14 @@ export default function ClientsPage() {
           </div>
         )}
       </main>
+
+      {deletingClient && (
+        <DeleteClientModal
+          client={deletingClient}
+          onClose={() => setDeletingClient(null)}
+          onDeleted={id => setClients(cs => cs.filter(c => c.id !== id))}
+        />
+      )}
     </div>
   )
 }
