@@ -26,6 +26,7 @@ const updateSchema = z.object({
     bucket3_repayment_cents: z.number().int().min(0),
     notes: z.string().optional(),
   })).nullable().optional(),
+  age_bands: z.any().nullable().optional(),
 })
 
 async function getScenarioWithAuth(id: string, userId: string, role: string) {

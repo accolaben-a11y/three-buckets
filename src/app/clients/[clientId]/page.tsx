@@ -9,27 +9,7 @@ import Bucket3Panel from '@/components/buckets/Bucket3Panel'
 import CashFlowDashboard from '@/components/dashboard/CashFlowDashboard'
 import Modal from '@/components/ui/Modal'
 import type { FullCalculationResult } from '@/lib/calculations'
-
-interface ClientData {
-  id: string
-  first_name: string
-  last_name: string
-  age: number
-  spouse_name: string | null
-  spouse_age: number | null
-  marital_status: string
-  state: string
-  target_retirement_age: number
-  planning_horizon_age: number
-  model_survivor: boolean
-  survivor_spouse: string | null
-  survivor_event_age: number | null
-  income_items: IncomeItem[]
-  nest_egg_accounts: NestEggAccount[]
-  home_equity: HomeEquityData | null
-  scenarios: Scenario[]
-  advisor: { full_name: string; contact_info: string | null }
-}
+import type { AgeBands } from '@/types/age-bands'
 
 export interface IncomeItem {
   id: string
@@ -97,6 +77,28 @@ export interface Scenario {
   bucket2_deposit_account_id: string | null
   bucket3_repayment_cents: number
   transition_events: Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }> | null
+  age_bands: AgeBands | null
+}
+
+interface ClientData {
+  id: string
+  first_name: string
+  last_name: string
+  age: number
+  spouse_name: string | null
+  spouse_age: number | null
+  marital_status: string
+  state: string
+  target_retirement_age: number
+  planning_horizon_age: number
+  model_survivor: boolean
+  survivor_spouse: string | null
+  survivor_event_age: number | null
+  income_items: IncomeItem[]
+  nest_egg_accounts: NestEggAccount[]
+  home_equity: HomeEquityData | null
+  scenarios: Scenario[]
+  advisor: { full_name: string; contact_info: string | null }
 }
 
 export default function ClientPage({ params }: { params: Promise<{ clientId: string }> }) {
@@ -116,6 +118,29 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
   const [deletingClient, setDeletingClient] = useState(false)
   const [overflowOpen, setOverflowOpen] = useState(false)
   const overflowRef = useRef<HTMLDivElement>(null)
+
+  // Panel collapse + presentation mode — persisted in localStorage
+  const [panelCollapsed, setPanelCollapsedRaw] = useState(false)
+  const [presentationMode, setPresentationModeRaw] = useState(false)
+
+  useEffect(() => {
+    setPanelCollapsedRaw(localStorage.getItem('tb_panel_collapsed') === 'true')
+    setPresentationModeRaw(localStorage.getItem('tb_presentation_mode') === 'true')
+  }, [])
+
+  function setPanelCollapsed(v: boolean) {
+    setPanelCollapsedRaw(v)
+    localStorage.setItem('tb_panel_collapsed', String(v))
+  }
+
+  function setPresentationMode(v: boolean) {
+    setPresentationModeRaw(v)
+    localStorage.setItem('tb_presentation_mode', String(v))
+    // Collapse panel when entering presentation mode
+    if (v) {
+      setPanelCollapsed(true)
+    }
+  }
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -195,10 +220,8 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
 
   async function cloneScenario() {
     if (!activeScenario) return
-    const res = await fetch(`/api/scenarios/${activeScenario.id}`, { method: 'POST' })
-    if (res.ok) {
-      await loadClient()
-    }
+    await fetch(`/api/scenarios/${activeScenario.id}`, { method: 'POST' })
+    await loadClient()
   }
 
   async function handleDeleteClient() {
@@ -233,6 +256,17 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
 
   const isMarried = client.marital_status !== 'single'
 
+  // Bucket tabs config
+  const bucketTabs = [
+    { key: 'bucket1' as const, icon: '💚', color: 'green' },
+    { key: 'bucket2' as const, icon: '💙', color: 'blue' },
+    { key: 'bucket3' as const, icon: '🔴', color: 'red' },
+  ]
+
+  const hasUnresolvedShortfalls = calcResult
+    ? Object.values(calcResult.surplusByAge).some(s => s < 0)
+    : false
+
   return (
     <div className="h-screen flex flex-col bg-slate-100 overflow-hidden">
       {/* ── HEADER ── */}
@@ -251,12 +285,32 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
           <h1 className="text-white font-semibold truncate">
             {client.first_name} {client.last_name}
             {client.spouse_name && (
-              <span className="text-slate-400 font-normal text-sm ml-2">& {client.spouse_name}</span>
+              <span className="text-white font-semibold"> &amp; {client.spouse_name}</span>
             )}
           </h1>
           <p className="text-slate-400 text-xs">
             Age {client.age}{client.spouse_age ? ` / ${client.spouse_age}` : ''} • {client.state} • Retirement age {client.target_retirement_age}
           </p>
+        </div>
+
+        {/* Mode Toggle (Update 2b) */}
+        <div className="flex items-center gap-1 shrink-0 bg-slate-800 rounded-lg p-0.5">
+          <button
+            onClick={() => setPresentationMode(false)}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              !presentationMode ? 'bg-white text-slate-900' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Advisor
+          </button>
+          <button
+            onClick={() => setPresentationMode(true)}
+            className={`px-3 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              presentationMode ? 'bg-white text-slate-900' : 'text-slate-400 hover:text-white'
+            }`}
+          >
+            Presentation
+          </button>
         </div>
 
         {/* Scenario Selector */}
@@ -266,10 +320,7 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
               type="text"
               value={scenarioName}
               onChange={e => setScenarioName(e.target.value)}
-              onBlur={async () => {
-                setEditingName(false)
-                await saveScenario({ name: scenarioName })
-              }}
+              onBlur={async () => { setEditingName(false); await saveScenario({ name: scenarioName }) }}
               onKeyDown={e => e.key === 'Enter' && (e.target as HTMLInputElement).blur()}
               autoFocus
               className="bg-slate-700 text-white px-3 py-1.5 rounded-lg text-sm border border-slate-600 focus:outline-none focus:border-blue-400 w-48"
@@ -297,11 +348,7 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
               ))}
             </select>
           )}
-          <button
-            onClick={() => setEditingName(true)}
-            className="text-slate-400 hover:text-white"
-            title="Rename scenario"
-          >
+          <button onClick={() => setEditingName(true)} className="text-slate-400 hover:text-white" title="Rename scenario">
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
             </svg>
@@ -312,7 +359,7 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
         {isMarried && (
           <button
             onClick={toggleSurvivor}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-medium transition-colors shrink-0 ${
               survivorMode ? 'bg-amber-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
             }`}
           >
@@ -332,11 +379,7 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
           </button>
           {/* Overflow menu */}
           <div ref={overflowRef} className="relative">
-            <button
-              onClick={() => setOverflowOpen(v => !v)}
-              className="text-slate-400 hover:text-white p-1 rounded"
-              title="More options"
-            >
+            <button onClick={() => setOverflowOpen(v => !v)} className="text-slate-400 hover:text-white p-1 rounded" title="More options">
               <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
                 <circle cx="5" cy="12" r="1.5" /><circle cx="12" cy="12" r="1.5" /><circle cx="19" cy="12" r="1.5" />
               </svg>
@@ -352,10 +395,7 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
               </div>
             )}
           </div>
-          <button
-            onClick={() => signOut({ callbackUrl: '/login' })}
-            className="text-slate-500 hover:text-slate-300 text-xs ml-2"
-          >
+          <button onClick={() => signOut({ callbackUrl: '/login' })} className="text-slate-500 hover:text-slate-300 text-xs ml-2">
             Sign Out
           </button>
         </div>
@@ -369,74 +409,118 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
       )}
 
       {/* ── MAIN SPLIT PANEL ── */}
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
 
-        {/* ── LEFT PANEL — Bucket Entry ── */}
-        <div className="w-[40%] min-w-[420px] flex flex-col bg-white border-r border-slate-200 overflow-hidden">
-          {/* Bucket Tabs */}
-          <div className="flex border-b border-slate-200 shrink-0">
-            {[
-              { key: 'bucket1', label: 'Bucket 1', sublabel: 'Income', color: 'text-green-600 border-green-500 bg-green-50' },
-              { key: 'bucket2', label: 'Bucket 2', sublabel: 'Nest Egg', color: 'text-blue-600 border-blue-500 bg-blue-50' },
-              { key: 'bucket3', label: 'Bucket 3', sublabel: 'Home Equity', color: 'text-red-600 border-red-500 bg-red-50' },
-            ].map(({ key, label, sublabel, color }) => (
+        {/* ── LEFT PANEL — Bucket Entry (collapsible) ── */}
+        <div
+          className="flex flex-col bg-white border-r border-slate-200 overflow-hidden shrink-0 transition-all duration-200"
+          style={{ width: panelCollapsed ? 48 : '40%', minWidth: panelCollapsed ? 48 : 420 }}
+        >
+          {panelCollapsed ? (
+            /* Collapsed icon strip */
+            <div className="flex flex-col items-center py-3 gap-3">
+              {/* Expand arrow */}
               <button
-                key={key}
-                onClick={() => setActiveTab(key as typeof activeTab)}
-                className={`flex-1 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
-                  activeTab === key
-                    ? `${color} border-current`
-                    : 'text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50'
-                }`}
+                onClick={() => setPanelCollapsed(false)}
+                className="p-1.5 rounded text-slate-500 hover:text-slate-800 hover:bg-slate-100"
+                title="Expand panel"
               >
-                <div className="font-semibold">{label}</div>
-                <div className="text-xs opacity-75">{sublabel}</div>
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                </svg>
               </button>
-            ))}
-          </div>
+              {/* Bucket icons */}
+              {bucketTabs.map(({ key, icon }) => (
+                <button
+                  key={key}
+                  onClick={() => { setPanelCollapsed(false); setActiveTab(key); if (presentationMode) setPresentationMode(false) }}
+                  title={`Open ${key.replace('bucket', 'Bucket ')}`}
+                  className={`w-8 h-8 rounded-full flex items-center justify-center text-sm border-2 transition-colors ${
+                    activeTab === key ? 'border-slate-400 bg-slate-100' : 'border-transparent hover:border-slate-200'
+                  }`}
+                >
+                  {icon}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              {/* Bucket Tabs */}
+              <div className="flex border-b border-slate-200 shrink-0">
+                {[
+                  { key: 'bucket1' as const, label: 'Bucket 1', sublabel: 'Income', color: 'text-green-600 border-green-500 bg-green-50' },
+                  { key: 'bucket2' as const, label: 'Bucket 2', sublabel: 'Nest Egg', color: 'text-blue-600 border-blue-500 bg-blue-50' },
+                  { key: 'bucket3' as const, label: 'Bucket 3', sublabel: 'Home Equity', color: 'text-red-600 border-red-500 bg-red-50' },
+                ].map(({ key, label, sublabel, color }) => (
+                  <button
+                    key={key}
+                    onClick={() => setActiveTab(key)}
+                    className={`flex-1 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === key ? `${color} border-current` : 'text-slate-500 border-transparent hover:text-slate-700 hover:bg-slate-50'
+                    }`}
+                  >
+                    <div className="font-semibold">{label}</div>
+                    <div className="text-xs opacity-75">{sublabel}</div>
+                  </button>
+                ))}
+                {/* Collapse arrow */}
+                <button
+                  onClick={() => setPanelCollapsed(true)}
+                  className="px-2 text-slate-400 hover:text-slate-600 border-b-2 border-transparent hover:bg-slate-50"
+                  title="Collapse panel"
+                >
+                  <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+                  </svg>
+                </button>
+              </div>
 
-          {/* Tab Content */}
-          <div className="flex-1 overflow-y-auto">
-            {activeTab === 'bucket1' && (
-              <Bucket1Panel
-                client={client}
-                scenario={activeScenario}
-                onUpdate={async () => { await loadClient(); await runCalculations() }}
-                onScenarioUpdate={saveScenario}
-              />
-            )}
-            {activeTab === 'bucket2' && (
-              <Bucket2Panel
-                client={client}
-                scenario={activeScenario}
-                calcResult={calcResult}
-                cashToClose={
-                  client.home_equity?.hecm_cash_to_close_account_id && (calcResult?.hecm?.availableProceedsCents ?? 0) < 0
-                    ? { accountId: client.home_equity.hecm_cash_to_close_account_id, amountCents: Math.abs(calcResult!.hecm!.availableProceedsCents) }
-                    : null
-                }
-                onUpdate={async () => { await loadClient(); await runCalculations() }}
-              />
-            )}
-            {activeTab === 'bucket3' && (
-              <Bucket3Panel
-                client={client}
-                calcResult={calcResult}
-                onUpdate={async () => { await loadClient(); await runCalculations() }}
-              />
-            )}
-          </div>
+              {/* Tab Content */}
+              <div className="flex-1 overflow-y-auto">
+                {activeTab === 'bucket1' && (
+                  <Bucket1Panel
+                    client={client}
+                    scenario={activeScenario}
+                    onUpdate={async () => { await loadClient(); await runCalculations() }}
+                    onScenarioUpdate={saveScenario}
+                  />
+                )}
+                {activeTab === 'bucket2' && (
+                  <Bucket2Panel
+                    client={client}
+                    scenario={activeScenario}
+                    calcResult={calcResult}
+                    cashToClose={
+                      client.home_equity?.hecm_cash_to_close_account_id && (calcResult?.hecm?.availableProceedsCents ?? 0) < 0
+                        ? { accountId: client.home_equity.hecm_cash_to_close_account_id, amountCents: Math.abs(calcResult!.hecm!.availableProceedsCents) }
+                        : null
+                    }
+                    onUpdate={async () => { await loadClient(); await runCalculations() }}
+                  />
+                )}
+                {activeTab === 'bucket3' && (
+                  <Bucket3Panel
+                    client={client}
+                    calcResult={calcResult}
+                    onUpdate={async () => { await loadClient(); await runCalculations() }}
+                  />
+                )}
+              </div>
+            </>
+          )}
         </div>
 
         {/* ── RIGHT PANEL — Live Cash Flow Dashboard ── */}
-        <div className="flex-1 min-w-0 overflow-y-auto bg-slate-50">
+        <div className="flex-1 min-w-0 overflow-y-auto bg-slate-50 transition-all duration-200">
           <CashFlowDashboard
             client={client}
             scenario={activeScenario}
             calcResult={calcResult}
             calcLoading={calcLoading}
             survivorMode={survivorMode}
+            presentationMode={presentationMode}
             onScenarioUpdate={saveScenario}
+            hasUnresolvedShortfalls={hasUnresolvedShortfalls}
           />
         </div>
       </div>
@@ -462,17 +546,10 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
           This action will remove them from your client list. Contact your administrator if you need to recover this record.
         </p>
         <div className="flex gap-3">
-          <button
-            autoFocus
-            onClick={() => setDeletingClient(false)}
-            className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg hover:bg-slate-50 font-medium"
-          >
+          <button autoFocus onClick={() => setDeletingClient(false)} className="flex-1 border border-slate-300 text-slate-700 py-2 rounded-lg hover:bg-slate-50 font-medium">
             Cancel
           </button>
-          <button
-            onClick={handleDeleteClient}
-            className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg font-semibold"
-          >
+          <button onClick={handleDeleteClient} className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-lg font-semibold">
             Delete Client
           </button>
         </div>

@@ -1,5 +1,5 @@
 'use client'
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 
 interface Props {
   value: number // cents
@@ -12,24 +12,39 @@ interface Props {
   placeholder?: string
 }
 
-export default function CurrencyInput({ value, onChange, label, helperText, className = '', disabled, min = 0, placeholder }: Props) {
-  const [display, setDisplay] = useState(() => (value / 100).toFixed(0))
+function formatWithCommas(dollars: number): string {
+  return Math.round(dollars).toLocaleString('en-US')
+}
 
+export default function CurrencyInput({ value, onChange, label, helperText, className = '', disabled, min = 0, placeholder }: Props) {
+  const [display, setDisplay] = useState(() => formatWithCommas(value / 100))
+  const focused = useRef(false)
+
+  // Only sync from parent when not focused (avoids mid-type resets)
   useEffect(() => {
-    setDisplay((value / 100).toFixed(0))
+    if (!focused.current) {
+      setDisplay(formatWithCommas(value / 100))
+    }
   }, [value])
+
+  function handleFocus() {
+    focused.current = true
+    // Strip commas on focus so user can type cleanly
+    setDisplay(display.replace(/,/g, ''))
+  }
 
   function handleChange(e: React.ChangeEvent<HTMLInputElement>) {
     const raw = e.target.value.replace(/[^0-9]/g, '')
     setDisplay(raw)
-    const dollars = parseFloat(raw) || 0
-    onChange(Math.round(dollars * 100))
+    // Do NOT call onChange here — recalculate on blur only
   }
 
   function handleBlur() {
-    const dollars = parseFloat(display) || 0
+    focused.current = false
+    const raw = display.replace(/,/g, '')
+    const dollars = parseFloat(raw) || 0
     const clamped = Math.max(min / 100, dollars)
-    setDisplay(clamped.toFixed(0))
+    setDisplay(formatWithCommas(clamped))
     onChange(Math.round(clamped * 100))
   }
 
@@ -43,6 +58,7 @@ export default function CurrencyInput({ value, onChange, label, helperText, clas
           type="text"
           value={display}
           onChange={handleChange}
+          onFocus={handleFocus}
           onBlur={handleBlur}
           disabled={disabled}
           placeholder={placeholder ?? '0'}

@@ -1,11 +1,11 @@
 /**
  * Retirement Phase Calculations
- * Models cash flow depletion from age 62 to planning horizon.
+ * Models cash flow depletion from retirement age to planning horizon.
+ * Uses per-age draw/deposit/repayment maps derived from age bands.
  */
 
-export interface MonthlySnapshot {
+export interface YearlySnapshot {
   age: number
-  month: number // month index from retirement start
   bucket1IncomeCents: number
   bucket2BalanceCents: number
   bucket2DrawCents: number
@@ -13,17 +13,7 @@ export interface MonthlySnapshot {
   bucket3DrawCents: number
   totalIncomeCents: number
   targetIncomeCents: number
-  shortfallCents: number
-  surplusCents: number
-}
-
-export interface YearlySnapshot {
-  age: number
-  bucket1IncomeCents: number
-  bucket2BalanceCents: number
-  bucket3BalanceCents: number
-  totalIncomeCents: number
-  targetIncomeCents: number
+  surplusCents: number  // positive = surplus over target, negative = shortfall
 }
 
 export interface RetirementProjectionInput {
@@ -31,18 +21,20 @@ export interface RetirementProjectionInput {
   planningHorizonAge: number
 
   // Bucket 1 — income streams with effective amounts per age
-  bucket1MonthlyByAge: Record<number, number> // age -> monthly income cents
+  bucket1MonthlyByAge: Record<number, number>
 
-  // Bucket 2 — nest egg
+  // Bucket 2 — nest egg (per-age maps from age bands)
   bucket2StartBalanceCents: number
-  bucket2MonthlyDrawCents: number
   bucket2AnnualRateBps: number
+  bucket2DrawsByAge: Record<number, number>
+  bucket2DepositsByAge: Record<number, number>
 
-  // Bucket 3 — HECM
+  // Bucket 3 — HECM (per-age maps from age bands)
   bucket3Type: 'none' | 'lump_sum' | 'loc' | 'tenure'
-  bucket3StartBalanceCents: number   // LOC starting balance (after any mortgage payoff)
-  bucket3MonthlyDrawCents: number    // LOC draw or tenure payment
+  bucket3StartBalanceCents: number
   bucket3LocGrowthRateBps: number
+  bucket3DrawsByAge: Record<number, number>
+  bucket3RepaymentsByAge: Record<number, number>
 
   // Income target
   targetMonthlyIncomeCents: number
@@ -52,11 +44,7 @@ export interface RetirementProjectionInput {
   survivorEventAge?: number
   survivorBucket1MonthlyByAge?: Record<number, number>
 
-  // Post-retirement surplus deposits
-  bucket2DepositCents?: number
-  bucket3RepaymentCents?: number
-
-  // Age-triggered one-time reallocation events
+  // Age-triggered one-time reallocation events (legacy transition_events)
   ageTriggeredEvents?: Record<number, { bucket2Cents: number; bucket3Cents: number }>
 }
 
@@ -70,18 +58,18 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
     planningHorizonAge,
     bucket1MonthlyByAge,
     bucket2StartBalanceCents,
-    bucket2MonthlyDrawCents,
     bucket2AnnualRateBps,
+    bucket2DrawsByAge,
+    bucket2DepositsByAge,
     bucket3Type,
     bucket3StartBalanceCents,
-    bucket3MonthlyDrawCents,
     bucket3LocGrowthRateBps,
+    bucket3DrawsByAge,
+    bucket3RepaymentsByAge,
     targetMonthlyIncomeCents,
     inflationRateBps,
     survivorEventAge,
     survivorBucket1MonthlyByAge,
-    bucket2DepositCents = 0,
-    bucket3RepaymentCents = 0,
     ageTriggeredEvents,
   } = input
 
@@ -89,9 +77,7 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
   const nest2MonthlyRate = (bucket2AnnualRateBps / 10000) / 12
   const locMonthlyRate = (bucket3LocGrowthRateBps / 10000) / 12
 
-  // Build yearly snapshots
   let b2Bal = bucket2StartBalanceCents
-  // Track bucket3 balance for any type that has a starting balance (loc, or lump_sum with converted LOC)
   let b3Bal = bucket3StartBalanceCents
   let targetMonthly = targetMonthlyIncomeCents
 
@@ -103,7 +89,7 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
       targetMonthly = Math.floor(targetMonthly * Math.pow(1 + inflationRateBps / 10000, 1))
     }
 
-    // Apply age-triggered one-time reallocation events
+    // Apply age-triggered one-time reallocation events (from legacy transition_events)
     if (ageTriggeredEvents?.[age]) {
       b2Bal += ageTriggeredEvents[age].bucket2Cents
       b3Bal += ageTriggeredEvents[age].bucket3Cents
@@ -115,36 +101,44 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
       : bucket1MonthlyByAge
     const b1Income = b1Map[age] ?? 0
 
+    // Per-age draw/deposit/repayment values from age bands
+    const b2Draw = bucket2DrawsByAge[age] ?? 0
+    const b2Deposit = bucket2DepositsByAge[age] ?? 0
+    const b3Draw = bucket3DrawsByAge[age] ?? 0
+    const b3Repayment = bucket3RepaymentsByAge[age] ?? 0
+
     // Simulate 12 months for this year
     for (let m = 0; m < 12; m++) {
       if (b2Bal > 0) {
         b2Bal = Math.floor(b2Bal * (1 + nest2MonthlyRate))
-        b2Bal = Math.max(0, b2Bal - bucket2MonthlyDrawCents)
+        b2Bal = Math.max(0, b2Bal - b2Draw)
       }
-      // Track bucket3 LOC balance (applies to 'loc' type and lump_sum with converted LOC)
       if (b3Bal > 0) {
         b3Bal = Math.floor(b3Bal * (1 + locMonthlyRate))
-        b3Bal = Math.max(0, b3Bal - bucket3MonthlyDrawCents)
+        b3Bal = Math.max(0, b3Bal - b3Draw)
       }
-      // Surplus deposits applied after draws
-      if (bucket2DepositCents > 0) {
-        b2Bal += bucket2DepositCents
-      }
-      if (bucket3RepaymentCents > 0) {
-        b3Bal += bucket3RepaymentCents
-      }
+      // Deposits and repayments applied after draws
+      if (b2Deposit > 0) b2Bal += b2Deposit
+      if (b3Repayment > 0) b3Bal += b3Repayment
     }
 
-    const b3Draw = bucket3MonthlyDrawCents
-    const totalMonthlyIncome = b1Income + bucket2MonthlyDrawCents + b3Draw
+    // Effective draw this year (capped at available balance)
+    const effectiveB2Draw = b2Bal <= 0 ? 0 : b2Draw
+    const effectiveB3Draw = bucket3Type === 'none' ? 0 : (b3Bal <= 0 ? 0 : b3Draw)
+
+    const totalMonthlyIncome = b1Income + effectiveB2Draw + effectiveB3Draw
+    const surplusCents = totalMonthlyIncome - targetMonthly
 
     snapshots.push({
       age,
       bucket1IncomeCents: b1Income,
       bucket2BalanceCents: b2Bal,
+      bucket2DrawCents: effectiveB2Draw,
       bucket3BalanceCents: b3Bal,
+      bucket3DrawCents: effectiveB3Draw,
       totalIncomeCents: totalMonthlyIncome,
       targetIncomeCents: targetMonthly,
+      surplusCents,
     })
 
     if (age >= planningHorizonAge) break

@@ -8,15 +8,16 @@ datasource db {
 }
 
 model User {
-  id            String    @id @default(uuid())
-  email         String    @unique
+  id            String     @id @default(uuid())
+  email         String     @unique
   password_hash String
   role          UserRole
   full_name     String
   contact_info  String?
-  is_active     Boolean   @default(true)
-  created_at    DateTime  @default(now())
+  is_active     Boolean    @default(true)
+  created_at    DateTime   @default(now())
   clients       Client[]
+  baselines     Baseline[]
 
   @@map("users")
 }
@@ -125,10 +126,28 @@ model Scenario {
   bucket2_deposit_account_id  String?
   bucket3_repayment_cents     Int           @default(0)
   transition_events           Json?
+  age_bands                   Json?
   created_at                  DateTime      @default(now())
   updated_at                  DateTime      @updatedAt
 
   @@map("scenarios")
+}
+
+model Baseline {
+  id                       String   @id @default(uuid())
+  name                     String
+  created_by               String
+  creator                  User     @relation(fields: [created_by], references: [id])
+  is_default               Boolean  @default(false)
+  inflation_rate_bps       Int      @default(300)
+  home_appreciation_bps    Int      @default(400)
+  loc_growth_rate_bps      Int      @default(600)
+  planning_horizon_age     Int      @default(90)
+  hecm_lending_limit_cents Int      @default(120975000)
+  created_at               DateTime @default(now())
+  updated_at               DateTime @updatedAt
+
+  @@map("baselines")
 }
 
 model GlobalSettings {

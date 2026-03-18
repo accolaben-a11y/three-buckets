@@ -1,12 +1,16 @@
 'use client'
-import { useState, useCallback, useRef } from 'react'
+import { useState, useRef } from 'react'
 import CurrencyInput from '@/components/ui/CurrencyInput'
 import LongevityChart from './LongevityChart'
 import Bucket1Summary from './Bucket1Summary'
-import Bucket1IncomeChart from './Bucket1IncomeChart'
-import TransitionEventsPanel from './TransitionEventsPanel'
+import IncomeByAgeChart from './IncomeByAgeChart'
+import AgeBandEditor from './AgeBandEditor'
+import PresentationBucketCard from './PresentationBucketCard'
+import AllocationBanner from './AllocationBanner'
+import AllocationDrawer from './AllocationDrawer'
 import type { Scenario } from '@/app/clients/[clientId]/page'
 import type { FullCalculationResult } from '@/lib/calculations'
+import { defaultAgeBands, type AgeBands } from '@/types/age-bands'
 
 interface ClientData {
   id: string
@@ -18,6 +22,7 @@ interface ClientData {
     existing_mortgage_payment_cents: number
     hecm_payout_type: string
     hecm_payoff_mortgage: boolean
+    hecm_loc_growth_rate_bps: number
   } | null
   nest_egg_accounts: Array<{ id: string; label: string; monthly_draw_cents: number }>
   income_items: Array<{
@@ -36,6 +41,8 @@ interface Props {
   calcResult: FullCalculationResult | null
   calcLoading: boolean
   survivorMode: boolean
+  presentationMode: boolean
+  hasUnresolvedShortfalls: boolean
   onScenarioUpdate: (updates: Partial<Scenario>) => Promise<void>
 }
 
@@ -44,24 +51,26 @@ function formatCents(cents: number) {
 }
 
 export default function CashFlowDashboard({
-  client, scenario, calcResult, calcLoading, survivorMode, onScenarioUpdate
+  client, scenario, calcResult, calcLoading, survivorMode, presentationMode, hasUnresolvedShortfalls, onScenarioUpdate,
 }: Props) {
   const [editingTarget, setEditingTarget] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
-  const bucket1ChartRef = useRef<HTMLDivElement>(null)
+  const [drawerOpen, setDrawerOpen] = useState(false)
+  const incomeChartRef = useRef<HTMLDivElement>(null)
   const longevityChartRef = useRef<HTMLDivElement>(null)
+
+  const ageBands: AgeBands = scenario.age_bands ?? defaultAgeBands(client.target_retirement_age, scenario.planning_horizon_age)
 
   async function handleExportPDF() {
     if (!scenario || pdfLoading) return
     setPdfLoading(true)
     try {
       const html2canvas = (await import('html2canvas')).default
-      // Wait for chart animations
       await new Promise(r => setTimeout(r, 1000))
       let bucket1ChartImage: string | null = null
       let longevityChartImage: string | null = null
-      if (bucket1ChartRef.current) {
-        const canvas = await html2canvas(bucket1ChartRef.current, { scale: 2, useCORS: true })
+      if (incomeChartRef.current) {
+        const canvas = await html2canvas(incomeChartRef.current, { scale: 2, useCORS: true })
         bucket1ChartImage = canvas.toDataURL('image/png')
       }
       if (longevityChartRef.current) {
@@ -96,8 +105,6 @@ export default function CashFlowDashboard({
     client.home_equity?.hecm_payout_type === 'lump_sum' &&
     client.home_equity?.hecm_payoff_mortgage === true
   const mortgageFreed = calcResult?.dashboard.mortgageFreedCents ?? 0
-
-  // Show before/after banner when mortgage is being eliminated by HECM and it changes the target
   const showMortgageBanner = hecmPayoffActive && mortgageFreed > 0 && grossTargetCents !== adjustedTargetCents
 
   const totalIncome = calcResult?.dashboard.totalMonthlyIncomeCents ?? 0
@@ -105,41 +112,34 @@ export default function CashFlowDashboard({
   const shortfall = Math.max(0, target - totalIncome)
   const surplus = Math.max(0, totalIncome - target)
 
-  const allocatedDeposits = (scenario.bucket2_deposit_cents ?? 0) + (scenario.bucket3_repayment_cents ?? 0)
-  const unallocatedSurplus = Math.max(0, surplus - allocatedDeposits)
-
-  const b2Max = client.nest_egg_accounts.reduce((s, a) => s + a.monthly_draw_cents, 0)
-
   const b3HasLoc = (calcResult?.hecm?.locStartBalanceCents ?? 0) > 0
   const b3IsTenure = client.home_equity?.hecm_payout_type === 'tenure'
+  const b3LocGrowthRateBps = client.home_equity?.hecm_loc_growth_rate_bps ?? 600
 
-  const b3Max = b3IsTenure
-    ? (calcResult?.hecm?.tenureMonthlyCents ?? 0)
-    : b3HasLoc
-      ? scenario.bucket3_draw_cents + 50000
-      : 0
-
-  const updateDraw = useCallback(async (bucket: 1 | 2 | 3, cents: number) => {
-    const key = `bucket${bucket}_draw_cents` as keyof Scenario
-    await onScenarioUpdate({ [key]: cents })
-  }, [onScenarioUpdate])
-
+  const nestEggAccounts = client.nest_egg_accounts.map(a => ({ id: a.id, label: a.label }))
   const depletionAges = calcResult?.depletionAges
 
-  // Validate surplus deposits
-  const depositTotal = (scenario.bucket2_deposit_cents ?? 0) + (scenario.bucket3_repayment_cents ?? 0)
-  const depositExceedsSurplus = surplus > 0 && depositTotal > surplus
+  const showIncomeChart = calcResult && (
+    calcResult.incomeByAgePerSource.sources.length > 0 ||
+    Object.values(calcResult.bucket2DrawsByAge).some(v => v > 0) ||
+    Object.values(calcResult.bucket3DrawsByAge).some(v => v > 0)
+  )
 
   return (
     <div className="p-5 space-y-4">
       {/* ── HIDDEN CHART CAPTURE CONTAINERS ── */}
       <div style={{ position: 'absolute', left: -9999, top: 0, pointerEvents: 'none' }}>
-        <div ref={bucket1ChartRef} style={{ width: 900, height: 400, background: '#fff', padding: 16 }}>
-          {calcResult && calcResult.incomeByAgePerSource.sources.length > 0 && (
-            <Bucket1IncomeChart
+        <div ref={incomeChartRef} style={{ width: 900, height: 400, background: '#fff', padding: 16 }}>
+          {calcResult && showIncomeChart && (
+            <IncomeByAgeChart
               incomeByAgePerSource={calcResult.incomeByAgePerSource}
+              bucket2DrawsByAge={calcResult.bucket2DrawsByAge}
+              bucket3DrawsByAge={calcResult.bucket3DrawsByAge}
+              adjustedTargetCents={adjustedTargetCents}
               retirementAge={client.target_retirement_age}
               planningHorizonAge={scenario.planning_horizon_age}
+              bandTransitionAges={calcResult.bandTransitionAges}
+              surplusByAge={calcResult.surplusByAge}
             />
           )}
         </div>
@@ -215,13 +215,17 @@ export default function CashFlowDashboard({
         {/* Shortfall / Surplus Indicator */}
         {!calcLoading && (
           <div className="mt-3">
-            {shortfall > 0 ? (
+            {hasUnresolvedShortfalls ? (
               <div className="rounded-lg px-3 py-2 text-sm font-medium bg-red-50 text-red-700 border border-red-200">
-                ⚠ Shortfall: {formatCents(shortfall)}/month
+                ⚠ Plan has unresolved shortfalls — review age bands below
               </div>
-            ) : unallocatedSurplus > 0 ? (
-              <div className="rounded-lg px-3 py-2 text-sm font-medium bg-green-50 text-green-700 border border-green-200">
-                ↑ Surplus available to reinvest: {formatCents(unallocatedSurplus)}/month
+            ) : shortfall > 0 ? (
+              <div className="rounded-lg px-3 py-2 text-sm font-medium bg-red-50 text-red-700 border border-red-200">
+                ⚠ Shortfall at retirement: {formatCents(shortfall)}/month
+              </div>
+            ) : surplus > 0 ? (
+              <div className="rounded-lg px-3 py-2 text-sm font-medium bg-amber-50 text-amber-700 border border-amber-200">
+                ↑ Surplus at retirement: {formatCents(surplus)}/month — allocate in age bands below
               </div>
             ) : totalIncome >= target ? (
               <div className="rounded-lg px-3 py-2 text-sm font-medium bg-green-50 text-green-700 border border-green-200">
@@ -232,81 +236,70 @@ export default function CashFlowDashboard({
         )}
       </div>
 
+      {/* ── ALLOCATION BANNER ── */}
+      {calcResult && Object.keys(calcResult.surplusByAge).length > 0 && (
+        <AllocationBanner
+          surplusByAge={calcResult.surplusByAge}
+          onOpenDrawer={() => setDrawerOpen(true)}
+        />
+      )}
+
+      {/* ── ALLOCATION DRAWER ── */}
+      {calcResult && (
+        <AllocationDrawer
+          isOpen={drawerOpen}
+          onClose={() => setDrawerOpen(false)}
+          surplusByAge={calcResult.surplusByAge}
+          adjustedTargetCents={adjustedTargetCents}
+          ageBands={ageBands}
+          onAgeBandsUpdate={bands => onScenarioUpdate({ age_bands: bands })}
+        />
+      )}
+
       {/* ── BUCKET 1 READ-ONLY SUMMARY ── */}
       <Bucket1Summary calcResult={calcResult} calcLoading={calcLoading} />
 
-      {/* ── BUCKET 2 + 3 SLIDERS ── */}
-      <div className="grid grid-cols-2 gap-3">
-        <BucketSlider
-          bucket={2}
-          label="Bucket 2 — Nest Egg"
-          color="blue"
-          value={scenario.bucket2_draw_cents}
-          maxValue={Math.max(b2Max, scenario.bucket2_draw_cents)}
-          onChange={v => updateDraw(2, v)}
-          depletionAge={depletionAges?.bucket2DepletionAge ?? null}
-          depositCents={scenario.bucket2_deposit_cents ?? 0}
-          onDepositChange={v => onScenarioUpdate({ bucket2_deposit_cents: v })}
-          depositAccounts={client.nest_egg_accounts.length > 1 ? client.nest_egg_accounts : undefined}
-          depositAccountId={scenario.bucket2_deposit_account_id}
-          onDepositAccountChange={id => onScenarioUpdate({ bucket2_deposit_account_id: id })}
-          depositError={depositExceedsSurplus ? 'Deposit exceeds available surplus.' : undefined}
+      {/* ── BUCKET 2 + 3 AGE-BAND EDITOR / PRESENTATION CARDS ── */}
+      {presentationMode ? (
+        <PresentationBucketCard
+          ageBands={ageBands}
+          calcResult={calcResult}
+          planningHorizonAge={scenario.planning_horizon_age}
+          b3HasLoc={b3HasLoc}
+          b3IsTenure={b3IsTenure}
+          b3LocGrowthRateBps={b3LocGrowthRateBps}
         />
-        <BucketSlider
-          bucket={3}
-          label="Bucket 3 — Home Equity"
-          color="red"
-          value={scenario.bucket3_draw_cents}
-          maxValue={Math.max(b3Max, scenario.bucket3_draw_cents)}
-          onChange={v => updateDraw(3, v)}
-          depletionAge={depletionAges?.bucket3DepletionAge ?? null}
-          disabled={!b3HasLoc && !b3IsTenure}
-          locStartBalanceCents={b3HasLoc ? (calcResult?.hecm?.locStartBalanceCents ?? 0) : undefined}
-          repaymentCents={b3HasLoc ? (scenario.bucket3_repayment_cents ?? 0) : undefined}
-          onRepaymentChange={b3HasLoc ? (v => onScenarioUpdate({ bucket3_repayment_cents: v })) : undefined}
-          repaymentError={depositExceedsSurplus ? 'Deposit exceeds available surplus.' : undefined}
-          noLocReason={
-            !b3HasLoc && !b3IsTenure
-              ? (client.home_equity?.hecm_payout_type === 'lump_sum'
-                  ? 'No LOC — lump sum used for mortgage payoff'
-                  : 'No HECM configured')
-              : undefined
-          }
-        />
-      </div>
-
-      {/* Depletion Warnings */}
-      {depletionAges?.bucket2DepletionAge && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2.5 text-sm text-red-700">
-          ⚠ Bucket 2 (Nest Egg) depletes at age {depletionAges.bucket2DepletionAge}. Reallocate draw to continue meeting income target.
-        </div>
-      )}
-      {depletionAges?.bucket3DepletionAge && (
-        <div className="bg-red-50 border border-red-200 rounded-lg px-4 py-2.5 text-sm text-red-700">
-          ⚠ Bucket 3 (Home Equity LOC) depletes at age {depletionAges.bucket3DepletionAge}. Reallocate draw to continue meeting income target.
-        </div>
-      )}
-
-      {/* ── BUCKET 1 INCOME BY AGE ── */}
-      {calcResult && calcResult.incomeByAgePerSource.sources.length > 0 && (
+      ) : (
         <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
-          <h3 className="font-semibold text-slate-700 mb-3">Bucket 1 — Income by Age</h3>
-          <Bucket1IncomeChart
-            incomeByAgePerSource={calcResult.incomeByAgePerSource}
+          <h3 className="font-semibold text-slate-700 mb-3">Bucket 2 + 3 — Draw &amp; Allocation Bands</h3>
+          <AgeBandEditor
+            ageBands={ageBands}
             retirementAge={client.target_retirement_age}
             planningHorizonAge={scenario.planning_horizon_age}
+            nestEggAccounts={nestEggAccounts}
+            b3HasLoc={b3HasLoc}
+            onUpdate={bands => onScenarioUpdate({ age_bands: bands })}
+            bucket2DepletionAge={depletionAges?.bucket2DepletionAge ?? null}
+            bucket3DepletionAge={depletionAges?.bucket3DepletionAge ?? null}
           />
         </div>
       )}
 
-      {/* ── TRANSITION EVENTS ── */}
-      {calcResult && calcResult.transitionAges.length > 0 && (
-        <TransitionEventsPanel
-          transitionAges={calcResult.transitionAges}
-          calcResult={calcResult}
-          scenario={scenario}
-          onScenarioUpdate={onScenarioUpdate}
-        />
+      {/* ── INCOME BY AGE CHART (All 3 Buckets) ── */}
+      {calcResult && showIncomeChart && (
+        <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-sm">
+          <h3 className="font-semibold text-slate-700 mb-3">Monthly Income by Age — All Sources</h3>
+          <IncomeByAgeChart
+            incomeByAgePerSource={calcResult.incomeByAgePerSource}
+            bucket2DrawsByAge={calcResult.bucket2DrawsByAge}
+            bucket3DrawsByAge={calcResult.bucket3DrawsByAge}
+            adjustedTargetCents={adjustedTargetCents}
+            retirementAge={client.target_retirement_age}
+            planningHorizonAge={scenario.planning_horizon_age}
+            bandTransitionAges={calcResult.bandTransitionAges}
+            surplusByAge={calcResult.surplusByAge}
+          />
+        </div>
       )}
 
       {/* ── LONGEVITY CHART ── */}
@@ -380,145 +373,6 @@ export default function CashFlowDashboard({
           {pdfLoading ? 'Generating PDF…' : 'Export PDF Report'}
         </button>
       </div>
-    </div>
-  )
-}
-
-// Bucket Slider Component
-function BucketSlider({ bucket, label, color, value, maxValue, onChange, depletionAge, disabled,
-  locStartBalanceCents, repaymentCents, onRepaymentChange, repaymentError, noLocReason,
-  depositCents, onDepositChange, depositAccounts, depositAccountId, onDepositAccountChange, depositError,
-}: {
-  bucket: 1 | 2 | 3
-  label: string
-  color: 'green' | 'blue' | 'red'
-  value: number
-  maxValue: number
-  onChange: (cents: number) => void
-  depletionAge: number | null
-  disabled?: boolean
-  locStartBalanceCents?: number
-  repaymentCents?: number
-  onRepaymentChange?: (v: number) => void
-  repaymentError?: string
-  noLocReason?: string
-  depositCents?: number
-  onDepositChange?: (v: number) => void
-  depositAccounts?: Array<{ id: string; label: string }>
-  depositAccountId?: string | null
-  onDepositAccountChange?: (id: string | null) => void
-  depositError?: string
-}) {
-  const colorMap = {
-    green: { bg: 'bg-green-500', text: 'text-green-700', border: 'border-green-200', light: 'bg-green-50', track: '#16a34a' },
-    blue: { bg: 'bg-blue-500', text: 'text-blue-700', border: 'border-blue-200', light: 'bg-blue-50', track: '#2563eb' },
-    red: { bg: 'bg-red-500', text: 'text-red-700', border: 'border-red-200', light: 'bg-red-50', track: '#dc2626' },
-  }
-  const c = colorMap[color]
-
-  const safeMax = Math.max(maxValue, 100)
-  const pct = Math.min(100, (value / safeMax) * 100)
-
-  function handleSlider(e: React.ChangeEvent<HTMLInputElement>) {
-    const raw = parseInt(e.target.value)
-    const snapped = Math.round(raw / 5000) * 5000
-    onChange(snapped)
-  }
-
-  return (
-    <div className={`${c.light} border ${c.border} rounded-xl p-3 ${disabled ? 'opacity-60' : ''}`}>
-      <div className="flex items-center gap-1.5 mb-1">
-        <div className={`w-2.5 h-2.5 rounded-full ${c.bg} shrink-0`} />
-        <span className="text-xs font-semibold text-slate-700 truncate">{label}</span>
-      </div>
-
-      {/* LOC Balance display for bucket 3 */}
-      {locStartBalanceCents !== undefined && locStartBalanceCents > 0 && (
-        <div className="text-xs text-slate-500 mb-1">
-          LOC Balance: {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(locStartBalanceCents / 100)}
-        </div>
-      )}
-
-      <div className={`text-xl font-bold ${c.text} mb-2`}>
-        {new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(value / 100)}/mo
-      </div>
-
-      <div className="relative mb-2">
-        <div className="h-2 bg-slate-200 rounded-full overflow-hidden mb-1">
-          <div className={`h-full ${c.bg} transition-all`} style={{ width: `${pct}%` }} />
-        </div>
-        <input
-          type="range"
-          min={0}
-          max={safeMax}
-          step={5000}
-          value={value}
-          onChange={handleSlider}
-          disabled={disabled}
-          style={{ color: c.track }}
-          className="w-full absolute inset-0 opacity-0 cursor-pointer disabled:cursor-not-allowed h-2"
-        />
-      </div>
-
-      <CurrencyInput
-        value={value}
-        onChange={v => onChange(Math.round(v / 5000) * 5000)}
-        className="text-xs"
-      />
-
-      {depletionAge && (
-        <div className="mt-1.5 text-xs text-red-600 font-medium">
-          ⚠ Depletes at age {depletionAge}
-        </div>
-      )}
-
-      {disabled && bucket === 3 && (
-        <div className="mt-1.5 text-xs text-slate-500 italic">
-          {noLocReason ?? 'No LOC established'}
-        </div>
-      )}
-
-      {/* Bucket 2: surplus deposit field */}
-      {bucket === 2 && onDepositChange !== undefined && (
-        <div className="mt-2 pt-2 border-t border-blue-200 space-y-1.5">
-          <CurrencyInput
-            label="Monthly Surplus Deposit"
-            value={depositCents ?? 0}
-            onChange={onDepositChange}
-            className="text-xs"
-          />
-          {depositAccounts && onDepositAccountChange && (
-            <div>
-              <label className="text-xs font-medium text-slate-600 mb-0.5 block">Deposit to Account</label>
-              <select
-                value={depositAccountId ?? ''}
-                onChange={e => onDepositAccountChange(e.target.value || null)}
-                className="w-full px-2 py-1 border border-slate-300 rounded text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="">— Any account —</option>
-                {depositAccounts.map(a => (
-                  <option key={a.id} value={a.id}>{a.label}</option>
-                ))}
-              </select>
-            </div>
-          )}
-          {depositError && <p className="text-xs text-red-600">{depositError}</p>}
-        </div>
-      )}
-
-      {/* Bucket 3: voluntary LOC repayment field */}
-      {bucket === 3 && onRepaymentChange !== undefined && (
-        <div className="mt-2 pt-2 border-t border-red-200 space-y-1.5">
-          <CurrencyInput
-            label="Monthly LOC Repayment"
-            value={repaymentCents ?? 0}
-            onChange={onRepaymentChange}
-            className="text-xs"
-          />
-          <p className="text-xs text-slate-500">Voluntary payments restore your line of credit</p>
-          {repaymentError && <p className="text-xs text-red-600">{repaymentError}</p>}
-        </div>
-      )}
     </div>
   )
 }

@@ -35,13 +35,37 @@ interface DeletedClient {
   advisor: { full_name: string }
 }
 
+interface Baseline {
+  id: string
+  name: string
+  is_default: boolean
+  inflation_rate_bps: number
+  home_appreciation_bps: number
+  loc_growth_rate_bps: number
+  planning_horizon_age: number
+  hecm_lending_limit_cents: number
+  created_at: string
+}
+
 export default function AdminPage() {
   const { data: session } = useSession()
   const router = useRouter()
   const [users, setUsers] = useState<User[]>([])
   const [settings, setSettings] = useState<Settings | null>(null)
   const [deletedClients, setDeletedClients] = useState<DeletedClient[]>([])
-  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'deleted'>('users')
+  const [baselines, setBaselines] = useState<Baseline[]>([])
+  const [activeTab, setActiveTab] = useState<'users' | 'settings' | 'deleted' | 'baselines'>('users')
+  const [editingBaseline, setEditingBaseline] = useState<Baseline | null>(null)
+  const [showNewBaseline, setShowNewBaseline] = useState(false)
+  const [baselineForm, setBaselineForm] = useState<Omit<Baseline, 'id' | 'created_at'>>({
+    name: '',
+    is_default: false,
+    inflation_rate_bps: 300,
+    home_appreciation_bps: 400,
+    loc_growth_rate_bps: 600,
+    planning_horizon_age: 90,
+    hecm_lending_limit_cents: 120975000,
+  })
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState<User | null>(null)
   const [saving, setSaving] = useState(false)
@@ -57,10 +81,11 @@ export default function AdminPage() {
   }, [session, router])
 
   async function loadData() {
-    const [usersRes, settingsRes, deletedRes] = await Promise.all([
+    const [usersRes, settingsRes, deletedRes, baselinesRes] = await Promise.all([
       fetch('/api/admin/users'),
       fetch('/api/admin/settings'),
       fetch('/api/admin/clients'),
+      fetch('/api/admin/baselines'),
     ])
     if (usersRes.ok) setUsers(await usersRes.json())
     if (settingsRes.ok) {
@@ -69,6 +94,33 @@ export default function AdminPage() {
       setSettingsForm(s)
     }
     if (deletedRes.ok) setDeletedClients(await deletedRes.json())
+    if (baselinesRes.ok) setBaselines(await baselinesRes.json())
+  }
+
+  async function saveBaseline(data: Omit<Baseline, 'id' | 'created_at'>, id?: string) {
+    setSaving(true)
+    if (id) {
+      await fetch(`/api/admin/baselines/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+    } else {
+      await fetch('/api/admin/baselines', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      })
+    }
+    setSaving(false)
+    setEditingBaseline(null)
+    setShowNewBaseline(false)
+    await loadData()
+  }
+
+  async function deleteBaseline(id: string) {
+    await fetch(`/api/admin/baselines/${id}`, { method: 'DELETE' })
+    await loadData()
   }
 
   async function restoreClient(id: string) {
@@ -148,6 +200,7 @@ export default function AdminPage() {
           {[
             { key: 'users', label: 'Advisor Accounts' },
             { key: 'settings', label: 'Global Settings' },
+            { key: 'baselines', label: `Baselines${baselines.length > 0 ? ` (${baselines.length})` : ''}` },
             { key: 'deleted', label: `Deleted Clients${deletedClients.length > 0 ? ` (${deletedClients.length})` : ''}` },
           ].map(tab => (
             <button
@@ -292,6 +345,92 @@ export default function AdminPage() {
                 {saving ? 'Saving…' : 'Save Settings'}
               </button>
             </div>
+          </div>
+        )}
+
+        {/* Baselines Tab */}
+        {activeTab === 'baselines' && (
+          <div>
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h2 className="text-xl font-bold text-slate-800">Named Baselines ({baselines.length})</h2>
+                <p className="text-slate-500 text-sm mt-1">Saved assumption sets. Mark one as default to pre-fill new scenarios.</p>
+              </div>
+              <button
+                onClick={() => {
+                  setBaselineForm({ name: '', is_default: false, inflation_rate_bps: 300, home_appreciation_bps: 400, loc_growth_rate_bps: 600, planning_horizon_age: 90, hecm_lending_limit_cents: 120975000 })
+                  setShowNewBaseline(true)
+                  setEditingBaseline(null)
+                }}
+                className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded-lg text-sm"
+              >
+                + New Baseline
+              </button>
+            </div>
+
+            {/* New / Edit form */}
+            {(showNewBaseline || editingBaseline) && (
+              <BaselineForm
+                value={baselineForm}
+                onChange={setBaselineForm}
+                onSave={() => saveBaseline(baselineForm, editingBaseline?.id)}
+                onCancel={() => { setShowNewBaseline(false); setEditingBaseline(null) }}
+                saving={saving}
+                isNew={!editingBaseline}
+              />
+            )}
+
+            {baselines.length === 0 && !showNewBaseline ? (
+              <div className="text-slate-500 text-sm">No baselines yet. Create one to save a named set of assumptions.</div>
+            ) : (
+              <div className="space-y-3 mt-4">
+                {baselines.map(b => (
+                  <div key={b.id} className={`bg-white rounded-xl border p-4 shadow-sm flex items-start justify-between gap-4 ${b.is_default ? 'border-blue-300' : 'border-slate-200'}`}>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-semibold text-slate-800">{b.name}</span>
+                        {b.is_default && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">Default</span>
+                        )}
+                      </div>
+                      <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-slate-500">
+                        <span>Inflation: {(b.inflation_rate_bps / 100).toFixed(1)}%</span>
+                        <span>Home Apprec: {(b.home_appreciation_bps / 100).toFixed(1)}%</span>
+                        <span>LOC Growth: {(b.loc_growth_rate_bps / 100).toFixed(1)}%</span>
+                        <span>Horizon: age {b.planning_horizon_age}</span>
+                        <span>HECM Limit: ${(b.hecm_lending_limit_cents / 100).toLocaleString()}</span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 shrink-0">
+                      <button
+                        onClick={() => {
+                          setEditingBaseline(b)
+                          setBaselineForm({
+                            name: b.name,
+                            is_default: b.is_default,
+                            inflation_rate_bps: b.inflation_rate_bps,
+                            home_appreciation_bps: b.home_appreciation_bps,
+                            loc_growth_rate_bps: b.loc_growth_rate_bps,
+                            planning_horizon_age: b.planning_horizon_age,
+                            hecm_lending_limit_cents: b.hecm_lending_limit_cents,
+                          })
+                          setShowNewBaseline(false)
+                        }}
+                        className="text-blue-600 hover:text-blue-800 text-sm"
+                      >
+                        Edit
+                      </button>
+                      <button
+                        onClick={() => deleteBaseline(b.id)}
+                        className="text-red-500 hover:text-red-700 text-sm"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         )}
 
@@ -467,6 +606,102 @@ export default function AdminPage() {
           </div>
         )}
       </Modal>
+    </div>
+  )
+}
+
+interface BaselineFormData {
+  name: string
+  is_default: boolean
+  inflation_rate_bps: number
+  home_appreciation_bps: number
+  loc_growth_rate_bps: number
+  planning_horizon_age: number
+  hecm_lending_limit_cents: number
+}
+
+function BaselineForm({ value, onChange, onSave, onCancel, saving, isNew }: {
+  value: BaselineFormData
+  onChange: (v: BaselineFormData) => void
+  onSave: () => void
+  onCancel: () => void
+  saving: boolean
+  isNew: boolean
+}) {
+  function setField<K extends keyof BaselineFormData>(key: K, val: BaselineFormData[K]) {
+    onChange({ ...value, [key]: val })
+  }
+
+  return (
+    <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3 mb-4">
+      <h3 className="font-semibold text-slate-800 text-sm">{isNew ? 'New Baseline' : 'Edit Baseline'}</h3>
+      <div>
+        <label className="text-xs font-medium text-slate-600 block mb-1">Name</label>
+        <input
+          type="text"
+          value={value.name}
+          onChange={e => setField('name', e.target.value)}
+          placeholder="e.g. Conservative 2025"
+          className="w-full px-3 py-1.5 border border-slate-300 rounded-lg text-sm text-slate-800 focus:outline-none focus:ring-2 focus:ring-blue-500"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        {[
+          { key: 'inflation_rate_bps', label: 'Inflation Rate', suffix: '%', divisor: 100 },
+          { key: 'home_appreciation_bps', label: 'Home Appreciation', suffix: '%', divisor: 100 },
+          { key: 'loc_growth_rate_bps', label: 'LOC Growth Rate', suffix: '%', divisor: 100 },
+          { key: 'planning_horizon_age', label: 'Planning Horizon', suffix: 'yrs', divisor: 1 },
+        ].map(({ key, label, suffix, divisor }) => (
+          <div key={key}>
+            <label className="text-xs font-medium text-slate-600 block mb-1">{label}</label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                value={(value[key as keyof BaselineFormData] as number) / divisor}
+                onChange={e => setField(key as keyof BaselineFormData, Math.round(parseFloat(e.target.value || '0') * divisor) as never)}
+                step={divisor === 100 ? 0.1 : 1}
+                className="w-full px-2 py-1 border border-slate-300 rounded text-sm text-right text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+              <span className="text-xs text-slate-500 shrink-0">{suffix}</span>
+            </div>
+          </div>
+        ))}
+      </div>
+      <div>
+        <label className="text-xs font-medium text-slate-600 block mb-1">HECM Lending Limit</label>
+        <div className="flex items-center gap-1">
+          <span className="text-sm text-slate-500">$</span>
+          <input
+            type="number"
+            value={value.hecm_lending_limit_cents / 100}
+            onChange={e => setField('hecm_lending_limit_cents', Math.round(parseFloat(e.target.value || '0') * 100))}
+            step={1000}
+            className="w-full px-2 py-1 border border-slate-300 rounded text-sm text-right text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          />
+        </div>
+      </div>
+      <div className="flex items-center gap-2">
+        <input
+          type="checkbox"
+          id="baseline_is_default"
+          checked={value.is_default}
+          onChange={e => setField('is_default', e.target.checked)}
+          className="w-4 h-4 text-blue-600"
+        />
+        <label htmlFor="baseline_is_default" className="text-sm text-slate-700">Set as default for new scenarios</label>
+      </div>
+      <div className="flex gap-2 pt-1">
+        <button onClick={onCancel} className="flex-1 border border-slate-300 text-slate-700 py-1.5 rounded-lg text-sm hover:bg-slate-50">
+          Cancel
+        </button>
+        <button
+          onClick={onSave}
+          disabled={saving || !value.name}
+          className="flex-1 bg-blue-600 text-white py-1.5 rounded-lg text-sm hover:bg-blue-700 disabled:bg-blue-400 font-semibold"
+        >
+          {saving ? 'Saving…' : isNew ? 'Create Baseline' : 'Save Changes'}
+        </button>
+      </div>
     </div>
   )
 }

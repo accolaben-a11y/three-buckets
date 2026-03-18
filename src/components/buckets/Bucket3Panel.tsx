@@ -240,7 +240,7 @@ export default function Bucket3Panel({ client, calcResult, onUpdate }: Props) {
               {isNetPositive && netProceeds > 0 && (
                 <div className="space-y-2">
                   <CurrencyInput
-                    label="Additional Lump Sum Draw"
+                    label="Additional Lump Sum Draw + Costs"
                     value={form.hecm_additional_lump_sum_cents}
                     onChange={v => update('hecm_additional_lump_sum_cents', v)}
                     helperText="Amount taken as cash at closing before remainder converts to LOC"

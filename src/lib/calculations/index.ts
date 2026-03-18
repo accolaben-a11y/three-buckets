@@ -8,6 +8,8 @@ import type { IncomeSourceMeta } from './income'
 import { calculateHecm } from './hecm'
 import { projectRetirementPhase, findDepletionAges, type YearlySnapshot } from './retirement'
 import type { IncomeItemInput } from './income'
+import type { AgeBands } from '@/types/age-bands'
+import { buildAgeMap, getBandTransitionAges } from '@/types/age-bands'
 
 export interface FullCalculationInput {
   // Client profile
@@ -49,11 +51,15 @@ export interface FullCalculationInput {
 
   // Scenario settings
   targetMonthlyIncomeCents: number
+  // Age-banded draws (preferred)
+  ageBands?: AgeBands | null
+  // Legacy scalar fallbacks (used if ageBands is null)
   bucket1DrawCents: number
   bucket2DrawCents: number
   bucket3DrawCents: number
   inflationRateBps: number
   lendingLimitCents: number
+  // Legacy scalar deposits/repayments (used if no bands)
   bucket2DepositCents?: number
   bucket3RepaymentCents?: number
 
@@ -62,7 +68,7 @@ export interface FullCalculationInput {
   survivorSpouse?: 'primary' | 'spouse'
   survivorEventAge?: number
 
-  // Age-triggered reallocation events (keyed by age as string from DB)
+  // Age-triggered reallocation events (legacy transition_events)
   transitionEvents?: Record<string, { bucket2_deposit_cents: number; bucket3_repayment_cents: number; notes?: string }>
 
   // Global defaults
@@ -106,7 +112,7 @@ export interface FullCalculationResult {
     totalBridgeCostCents: number
   }
 
-  // Dashboard numbers
+  // Dashboard numbers (at retirement age)
   dashboard: {
     mortgageFreedCents: number
     totalMonthlyIncomeCents: number
@@ -126,7 +132,7 @@ export interface FullCalculationResult {
     bucket3DepletionAge: number | null
   }
 
-  // Per-source income breakdown for stacked bar chart
+  // Per-source income breakdown for B1 stacked bar chart
   incomeByAgePerSource: {
     byAge: Record<number, Record<string, number>>
     sources: IncomeSourceMeta[]
@@ -134,6 +140,16 @@ export interface FullCalculationResult {
 
   // Ages where bucket1 income steps up (SS kicks in, etc.)
   transitionAges: number[]
+
+  // Per-age draws for all buckets (used by IncomeByAgeChart)
+  bucket2DrawsByAge: Record<number, number>
+  bucket3DrawsByAge: Record<number, number>
+
+  // Per-age surplus/shortfall vs adjusted target
+  surplusByAge: Record<number, number>
+
+  // Ages where any age band transitions (for chart step markers)
+  bandTransitionAges: number[]
 }
 
 export function runFullCalculation(input: FullCalculationInput): FullCalculationResult {
@@ -148,6 +164,7 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     nestEggAccounts,
     homeEquity,
     targetMonthlyIncomeCents,
+    ageBands,
     bucket1DrawCents,
     bucket2DrawCents,
     bucket3DrawCents,
@@ -165,7 +182,6 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
   const monthsToRetirement = Math.max(0, (retirementAge - primaryAge) * 12)
   const yearsToRetirement = Math.max(0, retirementAge - primaryAge)
 
-  // Youngest borrower age at retirement for LOC projections
   const youngestCurrentAge = spouseAge !== null && spouseAge !== undefined
     ? Math.min(primaryAge, spouseAge)
     : primaryAge
@@ -212,14 +228,14 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     })
   }
 
-  // ─── Adjusted Target (mortgage eliminated by HECM payoff) ───
+  // ─── Adjusted Target ───
   const hecmPayoffActive = homeEquity?.hecmPayoffMortgage === true && homeEquity?.hecmPayoutType === 'lump_sum'
   const mortgagePaymentCents = homeEquity?.existingMortgagePaymentCents ?? 0
   const adjustedTargetCents = (hecmPayoffActive && mortgagePaymentCents > 0)
     ? Math.max(0, targetMonthlyIncomeCents - mortgagePaymentCents)
     : targetMonthlyIncomeCents
 
-  // ─── Income by Age ───
+  // ─── Income by Age (Bucket 1) ───
   const bucket1MonthlyByAge = buildIncomeByAge(
     incomeItems,
     retirementAge,
@@ -259,7 +275,47 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     ssSpouseClaimAge
   )
 
-  // ─── Age-Triggered Events ───
+  // ─── Build per-age draw/deposit maps from age bands (or scalar fallback) ───
+  let b2DrawsByAge: Record<number, number>
+  let b2DepositsByAge: Record<number, number>
+  let b3DrawsByAge: Record<number, number>
+  let b3RepaymentsByAge: Record<number, number>
+  let bandTransitionAges: number[]
+
+  if (ageBands) {
+    b2DrawsByAge = buildAgeMap(ageBands.bucket2.draws, retirementAge, planningHorizonAge)
+    b2DepositsByAge = buildAgeMap(ageBands.bucket2.deposits, retirementAge, planningHorizonAge)
+    b3DrawsByAge = buildAgeMap(ageBands.bucket3.draws, retirementAge, planningHorizonAge)
+    b3RepaymentsByAge = buildAgeMap(ageBands.bucket3.repayments, retirementAge, planningHorizonAge)
+    bandTransitionAges = getBandTransitionAges(
+      [ageBands.bucket2.draws, ageBands.bucket2.deposits, ageBands.bucket3.draws, ageBands.bucket3.repayments],
+      retirementAge,
+      planningHorizonAge
+    )
+  } else {
+    // Scalar fallback (pre-migration scenarios)
+    const uniformMap = (val: number) => {
+      const m: Record<number, number> = {}
+      for (let a = retirementAge; a <= planningHorizonAge; a++) m[a] = val
+      return m
+    }
+    b2DrawsByAge = uniformMap(bucket2DrawCents)
+    b2DepositsByAge = uniformMap(bucket2DepositCents)
+    b3DrawsByAge = uniformMap(bucket3DrawCents)
+    b3RepaymentsByAge = uniformMap(bucket3RepaymentCents)
+    bandTransitionAges = []
+  }
+
+  // For tenure bucket3, override draws with tenure monthly amount
+  const isTenure = homeEquity?.hecmPayoutType === 'tenure'
+  if (isTenure && hecmResult) {
+    const tenureAmount = hecmResult.tenureMonthlyCents
+    for (const age in b3DrawsByAge) {
+      b3DrawsByAge[age] = tenureAmount
+    }
+  }
+
+  // ─── Age-Triggered Events (legacy transition_events) ───
   const ageTriggeredEvents: Record<number, { bucket2Cents: number; bucket3Cents: number }> | undefined =
     transitionEvents
       ? Object.fromEntries(
@@ -270,59 +326,59 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
         )
       : undefined
 
-  // ─── Dashboard Numbers ───
+  // ─── Dashboard Numbers (at retirement age) ───
   const mortgageFreedCents = hecmResult?.monthlyFreedCents ?? 0
-  const b3Monthly = homeEquity?.hecmPayoutType === 'tenure'
-    ? (hecmResult?.tenureMonthlyCents ?? 0)
-    : bucket3DrawCents
-
   const b1AtRetirement = bucket1MonthlyByAge[retirementAge] ?? 0
-  const totalMonthlyIncomeCents = b1AtRetirement + bucket2DrawCents + b3Monthly
+  const b2DrawAtRetirement = b2DrawsByAge[retirementAge] ?? 0
+  const b3DrawAtRetirement = b3DrawsByAge[retirementAge] ?? 0
+
+  const totalMonthlyIncomeCents = b1AtRetirement + b2DrawAtRetirement + b3DrawAtRetirement
   const shortfallCents = Math.max(0, adjustedTargetCents - totalMonthlyIncomeCents)
   const surplusCents = Math.max(0, totalMonthlyIncomeCents - adjustedTargetCents)
 
   // ─── Longevity Projection ───
-  // Deduct cash-to-close from bucket 2 start balance if needed
   const cashToClose = hecmResult ? Math.max(0, -hecmResult.availableProceedsCents) : 0
   const bucket2StartBalance = Math.max(0, totalProjectedNestEggCents - cashToClose)
-
-  const bucket2MonthlyDraw = bucket2DrawCents
+  const bucket3StartBalance = hecmResult?.locStartBalanceCents ?? 0
+  const bucket3LocGrowth = homeEquity?.hecmLocGrowthRateBps ?? globalLocGrowthRateBps
   const bucket2AnnualRate = nestEggAccounts.length > 0
     ? Math.floor(nestEggAccounts.reduce((s, a) => s + a.rateOfReturnBps, 0) / nestEggAccounts.length)
     : 600
-
-  const bucket3StartBalance = hecmResult?.locStartBalanceCents ?? 0
-  const bucket3Monthly = bucket3DrawCents
-  const bucket3LocGrowth = homeEquity?.hecmLocGrowthRateBps ?? globalLocGrowthRateBps
 
   const longevityProjection = projectRetirementPhase({
     retirementAge,
     planningHorizonAge,
     bucket1MonthlyByAge,
     bucket2StartBalanceCents: bucket2StartBalance,
-    bucket2MonthlyDrawCents: bucket2MonthlyDraw,
     bucket2AnnualRateBps: bucket2AnnualRate,
+    bucket2DrawsByAge: b2DrawsByAge,
+    bucket2DepositsByAge: b2DepositsByAge,
     bucket3Type: homeEquity?.hecmPayoutType ?? 'none',
     bucket3StartBalanceCents: bucket3StartBalance,
-    bucket3MonthlyDrawCents: bucket3Monthly,
     bucket3LocGrowthRateBps: bucket3LocGrowth,
+    bucket3DrawsByAge: b3DrawsByAge,
+    bucket3RepaymentsByAge: b3RepaymentsByAge,
     targetMonthlyIncomeCents: adjustedTargetCents,
     inflationRateBps,
     survivorEventAge: survivorConfig?.survivorEventAge,
     survivorBucket1MonthlyByAge,
-    bucket2DepositCents,
-    bucket3RepaymentCents,
     ageTriggeredEvents,
   })
 
   const depletionAges = findDepletionAges(longevityProjection)
 
-  // Compute ages where bucket1 income changes (SS kicks in, wage ends, etc.)
+  // ─── Transition Ages (Bucket 1 income steps) ───
   const transitionAges: number[] = []
   for (let i = 1; i < longevityProjection.length; i++) {
     if (longevityProjection[i].bucket1IncomeCents !== longevityProjection[i - 1].bucket1IncomeCents) {
       transitionAges.push(longevityProjection[i].age)
     }
+  }
+
+  // ─── Per-age surplus/shortfall ───
+  const surplusByAge: Record<number, number> = {}
+  for (const snap of longevityProjection) {
+    surplusByAge[snap.age] = snap.surplusCents
   }
 
   return {
@@ -352,8 +408,8 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
       shortfallCents,
       surplusCents,
       bucket1MonthlyCents: b1AtRetirement,
-      bucket2MonthlyCents: bucket2DrawCents,
-      bucket3MonthlyCents: b3Monthly,
+      bucket2MonthlyCents: b2DrawAtRetirement,
+      bucket3MonthlyCents: b3DrawAtRetirement,
       grossTargetCents: targetMonthlyIncomeCents,
       adjustedTargetCents,
     },
@@ -361,6 +417,10 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
     depletionAges,
     incomeByAgePerSource,
     transitionAges,
+    bucket2DrawsByAge: b2DrawsByAge,
+    bucket3DrawsByAge: b3DrawsByAge,
+    surplusByAge,
+    bandTransitionAges,
   }
 }
 
@@ -369,3 +429,4 @@ export { projectAccountBalance, projectHomeValue } from './accumulation'
 export { calculateHecm } from './hecm'
 export { buildIncomeByAge, calculateBridgePeriod } from './income'
 export type { IncomeItemInput, IncomeSourceMeta } from './income'
+export type { AgeBands, AgeBand, AgeBandWithMeta } from '@/types/age-bands'

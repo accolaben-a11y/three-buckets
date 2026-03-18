@@ -4,6 +4,7 @@ import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/db'
 import { runFullCalculation } from '@/lib/calculations'
 import type { IncomeItemInput } from '@/lib/calculations/income'
+import type { AgeBands } from '@/types/age-bands'
 
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions)
@@ -88,6 +89,7 @@ export async function POST(req: NextRequest) {
         }
       : null,
     targetMonthlyIncomeCents: scenario.target_monthly_income_cents,
+    ageBands: (scenario.age_bands as AgeBands | null) ?? null,
     bucket1DrawCents: scenario.bucket1_draw_cents,
     bucket2DrawCents: scenario.bucket2_draw_cents,
     bucket3DrawCents: scenario.bucket3_draw_cents,
