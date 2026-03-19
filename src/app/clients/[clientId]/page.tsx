@@ -258,8 +258,8 @@ export default function ClientPage({ params }: { params: Promise<{ clientId: str
 
   // Bucket tabs config
   const bucketTabs = [
-    { key: 'bucket1' as const, icon: '💚', color: 'green' },
-    { key: 'bucket2' as const, icon: '💙', color: 'blue' },
+    { key: 'bucket1' as const, icon: '🟢', color: 'green' },
+    { key: 'bucket2' as const, icon: '🔵', color: 'blue' },
     { key: 'bucket3' as const, icon: '🔴', color: 'red' },
   ]
 
