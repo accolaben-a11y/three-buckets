@@ -17,6 +17,8 @@ interface Props {
   planningHorizonAge: number
   bandTransitionAges: number[]
   surplusByAge: Record<number, number>
+  bucket2DepletionAge?: number | null
+  bucket3DepletionAge?: number | null
 }
 
 // Green palette for B1 sources
@@ -44,6 +46,8 @@ export default function IncomeByAgeChart({
   planningHorizonAge,
   bandTransitionAges,
   surplusByAge,
+  bucket2DepletionAge,
+  bucket3DepletionAge,
 }: Props) {
   const { byAge, sources } = incomeByAgePerSource
   const targetDollars = Math.round(adjustedTargetCents / 100)
@@ -59,11 +63,13 @@ export default function IncomeByAgeChart({
       entry[`b1_${src.id}`] = Math.round((ageMap[src.id] ?? 0) / 100)
     }
 
-    // B2 draw (blue)
-    entry['b2_draw'] = Math.round((bucket2DrawsByAge[age] ?? 0) / 100)
+    // B2 draw (blue) — absent for ages at/after depletion (Fix 3A enforcement)
+    const b2Depleted = bucket2DepletionAge != null && age >= bucket2DepletionAge
+    entry['b2_draw'] = b2Depleted ? 0 : Math.round((bucket2DrawsByAge[age] ?? 0) / 100)
 
-    // B3 draw (red)
-    entry['b3_draw'] = Math.round((bucket3DrawsByAge[age] ?? 0) / 100)
+    // B3 draw (red) — absent for ages at/after depletion (Fix 3A enforcement)
+    const b3Depleted = bucket3DepletionAge != null && age >= bucket3DepletionAge
+    entry['b3_draw'] = b3Depleted ? 0 : Math.round((bucket3DrawsByAge[age] ?? 0) / 100)
 
     // Shortfall bar (above the stacked bars, red) — only if negative surplus
     const surplus = surplusByAge[age] ?? 0

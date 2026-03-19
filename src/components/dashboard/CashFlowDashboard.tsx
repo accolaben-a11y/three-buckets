@@ -1,5 +1,5 @@
 'use client'
-import { useState, useRef } from 'react'
+import { useState, useRef, useMemo } from 'react'
 import CurrencyInput from '@/components/ui/CurrencyInput'
 import LongevityChart from './LongevityChart'
 import Bucket1Summary from './Bucket1Summary'
@@ -61,7 +61,14 @@ export default function CashFlowDashboard({
   const incomeChartRef = useRef<HTMLDivElement>(null)
   const longevityChartRef = useRef<HTMLDivElement>(null)
 
-  const ageBands: AgeBands = scenario.age_bands ?? defaultAgeBands(client.target_retirement_age, scenario.planning_horizon_age)
+  // useMemo stabilises band IDs when scenario.age_bands is null:
+  // without this, defaultAgeBands() creates new random IDs every render,
+  // causing BandSection's editingId/confirmDeleteId state to become stale.
+  const ageBands: AgeBands = useMemo(
+    () => scenario.age_bands ?? defaultAgeBands(client.target_retirement_age, scenario.planning_horizon_age),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [scenario.id, scenario.age_bands, client.target_retirement_age, scenario.planning_horizon_age],
+  )
 
   async function handleExportPDF() {
     if (!scenario || pdfLoading) return
@@ -142,6 +149,8 @@ export default function CashFlowDashboard({
               planningHorizonAge={scenario.planning_horizon_age}
               bandTransitionAges={calcResult.bandTransitionAges}
               surplusByAge={calcResult.surplusByAge}
+              bucket2DepletionAge={depletionAges?.bucket2DepletionAge}
+              bucket3DepletionAge={depletionAges?.bucket3DepletionAge}
             />
           )}
         </div>
@@ -309,6 +318,8 @@ export default function CashFlowDashboard({
             planningHorizonAge={scenario.planning_horizon_age}
             bandTransitionAges={calcResult.bandTransitionAges}
             surplusByAge={calcResult.surplusByAge}
+            bucket2DepletionAge={depletionAges?.bucket2DepletionAge}
+            bucket3DepletionAge={depletionAges?.bucket3DepletionAge}
           />
         </div>
       )}

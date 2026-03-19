@@ -9,6 +9,7 @@ export interface AgeBandWithMeta extends AgeBand {
   account_id?: string | null
   auto_created: boolean
   needs_review: boolean
+  depleted?: boolean
 }
 
 export interface SurplusAck {
@@ -76,16 +77,19 @@ export function defaultAgeBands(_retirementAge: number, planningHorizonAge: numb
 }
 
 /**
- * Add `addCents` to all bands that overlap the age range [startAge, endAge].
+ * Add or set `addCents` for all bands that overlap the age range [startAge, endAge].
  * Splits bands at the boundaries so the target range gets its own segments.
+ * mode='add' (default): adds addCents to existing amount
+ * mode='set': replaces existing amount with addCents
  */
 export function autoFillRange<T extends AgeBand>(
   bands: T[],
   startAge: number,
   endAge: number,
   addCents: number,
+  mode: 'add' | 'set' = 'add',
 ): T[] {
-  if (addCents === 0) return bands
+  if (addCents === 0 && mode === 'add') return bands
   const result: T[] = []
   for (const band of bands) {
     if (band.end_age < startAge || band.start_age > endAge) {
@@ -101,7 +105,7 @@ export function autoFillRange<T extends AgeBand>(
       id: newId(),
       start_age: Math.max(band.start_age, startAge),
       end_age: Math.min(band.end_age, endAge),
-      monthly_amount_cents: band.monthly_amount_cents + addCents,
+      monthly_amount_cents: mode === 'set' ? addCents : band.monthly_amount_cents + addCents,
     })
     if (band.end_age > endAge) {
       result.push({ ...band, id: newId(), start_age: endAge + 1 })

@@ -1,17 +1,25 @@
 'use client'
-import { useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import CurrencyInput from '@/components/ui/CurrencyInput'
 import { groupAges } from './AllocationBanner'
 import type { AgeRange } from './AllocationBanner'
-import type { AgeBands } from '@/types/age-bands'
+import type { AgeBands, AgeBand } from '@/types/age-bands'
 import { autoFillRange } from '@/types/age-bands'
 
 export interface AllocationEntry {
-  b2Cents: number
-  b3Cents: number
+  selectedBucket: 'b2' | 'b3' | null
+  amountCents: number
   acknowledged?: boolean
 }
 export type AllocationMap = Record<string, AllocationEntry>
+
+interface ConflictState {
+  rangeKey: string
+  isShortfall: boolean
+  bucket: 'b2' | 'b3'
+  amountCents: number
+  existingCents: number
+}
 
 interface Props {
   isOpen: boolean
@@ -34,10 +42,21 @@ function formatCents(cents: number) {
   return new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 }).format(cents / 100)
 }
 
+function hasConflictBands(bands: AgeBand[], startAge: number, endAge: number): number {
+  // Returns total existing cents in the overlapping range (0 if no conflict)
+  const overlapping = bands.filter(b =>
+    b.start_age <= endAge && b.end_age >= startAge && b.monthly_amount_cents > 0
+  )
+  if (overlapping.length === 0) return 0
+  return Math.round(overlapping.reduce((s, b) => s + b.monthly_amount_cents, 0) / overlapping.length)
+}
+
 export default function AllocationDrawer({
   isOpen, onClose, surplusByAge, adjustedTargetCents, ageBands, b3HasLoc,
   depletionAges, allocations, onAllocationsChange, onAgeBandsUpdate,
 }: Props) {
+  const [conflictState, setConflictState] = useState<ConflictState | null>(null)
+
   useEffect(() => {
     if (!isOpen) return
     function onKey(e: KeyboardEvent) { if (e.key === 'Escape') onClose() }
@@ -57,45 +76,11 @@ export default function AllocationDrawer({
   })
 
   function getEntry(r: AgeRange): AllocationEntry {
-    return allocations[rangeKey(r)] ?? { b2Cents: 0, b3Cents: 0 }
+    return allocations[rangeKey(r)] ?? { selectedBucket: null, amountCents: 0 }
   }
 
   function setEntry(r: AgeRange, entry: AllocationEntry) {
     onAllocationsChange({ ...allocations, [rangeKey(r)]: entry })
-  }
-
-  function confirmShortfall(r: AgeRange) {
-    const entry = getEntry(r)
-    if (entry.b2Cents === 0 && entry.b3Cents === 0) return
-
-    let updated = { ...ageBands }
-    if (entry.b2Cents > 0) {
-      updated = { ...updated, bucket2: { ...updated.bucket2, draws: autoFillRange(updated.bucket2.draws, r.startAge, r.endAge, entry.b2Cents) } }
-    }
-    if (entry.b3Cents > 0) {
-      updated = { ...updated, bucket3: { ...updated.bucket3, draws: autoFillRange(updated.bucket3.draws, r.startAge, r.endAge, entry.b3Cents) } }
-    }
-    onAgeBandsUpdate(updated)
-    setEntry(r, { b2Cents: 0, b3Cents: 0 })
-  }
-
-  function confirmSurplus(r: AgeRange) {
-    const entry = getEntry(r)
-    let updated = { ...ageBands }
-    if (entry.b2Cents > 0) {
-      updated = { ...updated, bucket2: { ...updated.bucket2, deposits: autoFillRange(updated.bucket2.deposits, r.startAge, r.endAge, entry.b2Cents) } }
-    }
-    if (entry.b3Cents > 0) {
-      updated = { ...updated, bucket3: { ...updated.bucket3, repayments: autoFillRange(updated.bucket3.repayments, r.startAge, r.endAge, entry.b3Cents) } }
-    }
-    if (entry.b2Cents > 0 || entry.b3Cents > 0) {
-      onAgeBandsUpdate(updated)
-    }
-    setEntry(r, { b2Cents: 0, b3Cents: 0 })
-  }
-
-  function acknowledgeRange(r: AgeRange) {
-    setEntry(r, { ...getEntry(r), acknowledged: true })
   }
 
   function isB2Depleted(r: AgeRange) {
@@ -106,6 +91,79 @@ export default function AllocationDrawer({
   function isB3Depleted(r: AgeRange) {
     const age = depletionAges?.bucket3DepletionAge
     return age != null && age <= r.startAge
+  }
+
+  function applyShortfall(r: AgeRange, bucket: 'b2' | 'b3', amountCents: number, mode: 'add' | 'set') {
+    let updated = { ...ageBands }
+    if (bucket === 'b2') {
+      updated = { ...updated, bucket2: { ...updated.bucket2, draws: autoFillRange(updated.bucket2.draws, r.startAge, r.endAge, amountCents, mode) } }
+    } else {
+      updated = { ...updated, bucket3: { ...updated.bucket3, draws: autoFillRange(updated.bucket3.draws, r.startAge, r.endAge, amountCents, mode) } }
+    }
+    onAgeBandsUpdate(updated)
+    setEntry(r, { selectedBucket: null, amountCents: 0 })
+    setConflictState(null)
+  }
+
+  function applySurplus(r: AgeRange, bucket: 'b2' | 'b3', amountCents: number, mode: 'add' | 'set') {
+    let updated = { ...ageBands }
+    if (bucket === 'b2') {
+      updated = { ...updated, bucket2: { ...updated.bucket2, deposits: autoFillRange(updated.bucket2.deposits, r.startAge, r.endAge, amountCents, mode) } }
+    } else {
+      updated = { ...updated, bucket3: { ...updated.bucket3, repayments: autoFillRange(updated.bucket3.repayments, r.startAge, r.endAge, amountCents, mode) } }
+    }
+    onAgeBandsUpdate(updated)
+    setEntry(r, { selectedBucket: null, amountCents: 0 })
+    setConflictState(null)
+  }
+
+  function confirmShortfall(r: AgeRange) {
+    const entry = getEntry(r)
+    if (!entry.selectedBucket || entry.amountCents <= 0) return
+
+    const targetBands = entry.selectedBucket === 'b2' ? ageBands.bucket2.draws : ageBands.bucket3.draws
+    const existing = hasConflictBands(targetBands, r.startAge, r.endAge)
+    if (existing > 0) {
+      setConflictState({ rangeKey: rangeKey(r), isShortfall: true, bucket: entry.selectedBucket, amountCents: entry.amountCents, existingCents: existing })
+      return
+    }
+
+    applyShortfall(r, entry.selectedBucket, entry.amountCents, 'add')
+  }
+
+  function confirmSurplus(r: AgeRange) {
+    const entry = getEntry(r)
+    if (!entry.selectedBucket || entry.amountCents <= 0) return
+
+    const targetBands = entry.selectedBucket === 'b2' ? ageBands.bucket2.deposits : ageBands.bucket3.repayments
+    const existing = hasConflictBands(targetBands, r.startAge, r.endAge)
+    if (existing > 0) {
+      setConflictState({ rangeKey: rangeKey(r), isShortfall: false, bucket: entry.selectedBucket, amountCents: entry.amountCents, existingCents: existing })
+      return
+    }
+
+    applySurplus(r, entry.selectedBucket, entry.amountCents, 'add')
+  }
+
+  function resolveConflict(mode: 'override' | 'merge' | 'cancel') {
+    if (!conflictState) return
+    if (mode === 'cancel') { setConflictState(null); return }
+
+    // Find the range from its key
+    const allRanges = [...shortfallRanges, ...surplusRanges]
+    const r = allRanges.find(range => rangeKey(range) === conflictState.rangeKey)
+    if (!r) { setConflictState(null); return }
+
+    const fillMode = mode === 'override' ? 'set' : 'add'
+    if (conflictState.isShortfall) {
+      applyShortfall(r, conflictState.bucket, conflictState.amountCents, fillMode)
+    } else {
+      applySurplus(r, conflictState.bucket, conflictState.amountCents, fillMode)
+    }
+  }
+
+  function acknowledgeRange(r: AgeRange) {
+    setEntry(r, { ...getEntry(r), acknowledged: true })
   }
 
   return (
@@ -121,8 +179,39 @@ export default function AllocationDrawer({
         {/* Content */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
           <div className="text-xs text-slate-500">
-            Target: {formatCents(adjustedTargetCents)}/mo. Enter amounts to cover shortfalls or allocate surpluses, then confirm to update age bands.
+            Target: {formatCents(adjustedTargetCents)}/mo. Select a bucket and enter an amount, then confirm to update age bands.
           </div>
+
+          {/* Conflict resolution prompt */}
+          {conflictState && (
+            <div className="border border-amber-300 rounded-lg p-3 bg-amber-50 text-xs space-y-2">
+              <div className="font-semibold text-amber-800">Band conflict detected</div>
+              <div className="text-slate-600">
+                An existing band for this age range already has {formatCents(conflictState.existingCents)}/mo.
+                How should the new amount ({formatCents(conflictState.amountCents)}/mo) be applied?
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => resolveConflict('override')}
+                  className="flex-1 text-xs py-1.5 rounded-lg bg-red-600 text-white font-semibold hover:bg-red-700"
+                >
+                  Override
+                </button>
+                <button
+                  onClick={() => resolveConflict('merge')}
+                  className="flex-1 text-xs py-1.5 rounded-lg bg-blue-600 text-white font-semibold hover:bg-blue-700"
+                >
+                  Merge
+                </button>
+                <button
+                  onClick={() => resolveConflict('cancel')}
+                  className="flex-1 text-xs py-1.5 rounded-lg border border-slate-300 text-slate-600 hover:bg-slate-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Shortfall ranges */}
           {shortfallRanges.length > 0 && (
@@ -131,55 +220,58 @@ export default function AllocationDrawer({
               <div className="space-y-3">
                 {shortfallRanges.map((r, i) => {
                   const entry = getEntry(r)
-                  const total = entry.b2Cents + entry.b3Cents
-                  const remaining = r.avgCents - total
                   const b2Depleted = isB2Depleted(r)
                   const b3Depleted = isB3Depleted(r)
                   const b3Unavailable = !b3HasLoc
+                  const canConfirm = entry.selectedBucket !== null && entry.amountCents > 0
+                  const isThisConflict = conflictState?.rangeKey === rangeKey(r)
                   return (
-                    <div key={i} className="border border-red-200 rounded-lg p-3 bg-red-50 space-y-2.5">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-800">
-                          🔴 Ages {r.startAge}{r.endAge !== r.startAge ? `–${r.endAge}` : ''}: ~{formatCents(r.avgCents)}/mo shortfall
+                    <div key={i} className={`border rounded-lg p-3 space-y-2.5 ${isThisConflict ? 'border-amber-300 bg-amber-50' : 'border-red-200 bg-red-50'}`}>
+                      <div className="text-sm font-semibold text-slate-800">
+                        🔴 Ages {r.startAge}{r.endAge !== r.startAge ? `–${r.endAge}` : ''}: ~{formatCents(r.avgCents)}/mo shortfall
+                      </div>
+                      <div className="text-xs text-slate-500">Cover this shortfall from:</div>
+
+                      {/* Bucket buttons */}
+                      <div className="flex gap-2">
+                        <BucketButton
+                          label="B2 — Nest Egg"
+                          color="blue"
+                          selected={entry.selectedBucket === 'b2'}
+                          disabled={b2Depleted}
+                          disabledReason={b2Depleted ? `B2 depleted at age ${depletionAges?.bucket2DepletionAge}` : undefined}
+                          onClick={() => setEntry(r, { ...entry, selectedBucket: entry.selectedBucket === 'b2' ? null : 'b2', amountCents: 0 })}
+                        />
+                        <BucketButton
+                          label="B3 — HECM/LOC"
+                          color="red"
+                          selected={entry.selectedBucket === 'b3'}
+                          disabled={b3Depleted || b3Unavailable}
+                          disabledReason={b3Unavailable ? 'No LOC configured' : b3Depleted ? `B3 depleted at age ${depletionAges?.bucket3DepletionAge}` : undefined}
+                          onClick={() => setEntry(r, { ...entry, selectedBucket: entry.selectedBucket === 'b3' ? null : 'b3', amountCents: 0 })}
+                        />
+                      </div>
+
+                      {/* Amount input — only shown when a bucket is selected */}
+                      {entry.selectedBucket && (
+                        <div>
+                          <div className="text-xs text-slate-500 mb-1">Amount</div>
+                          <CurrencyInput
+                            value={entry.amountCents}
+                            onChange={v => setEntry(r, { ...entry, amountCents: v })}
+                            className="text-xs w-full"
+                          />
+                          <div className={`text-xs mt-1 ${entry.amountCents >= r.avgCents ? 'text-green-700' : 'text-red-600'}`}>
+                            {entry.amountCents >= r.avgCents
+                              ? `✓ Covers ${formatCents(r.avgCents)}/mo shortfall`
+                              : `Gap: ${formatCents(r.avgCents - entry.amountCents)}/mo remaining`}
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">Cover this shortfall from:</div>
-                      </div>
-
-                      {/* B2 input */}
-                      <BucketAmountInput
-                        label="Bucket 2 — Nest Egg"
-                        value={entry.b2Cents}
-                        disabled={b2Depleted}
-                        disabledReason={b2Depleted ? `B2 depleted at age ${depletionAges?.bucket2DepletionAge}` : undefined}
-                        color="blue"
-                        onChange={v => setEntry(r, { ...entry, b2Cents: v })}
-                      />
-
-                      {/* B3 input */}
-                      <BucketAmountInput
-                        label="Bucket 3 — Home Equity"
-                        value={entry.b3Cents}
-                        disabled={b3Depleted || b3Unavailable}
-                        disabledReason={
-                          b3Unavailable ? 'No LOC configured' :
-                          b3Depleted ? `B3 depleted at age ${depletionAges?.bucket3DepletionAge}` :
-                          undefined
-                        }
-                        color="red"
-                        onChange={v => setEntry(r, { ...entry, b3Cents: v })}
-                      />
-
-                      {/* Totals */}
-                      <div className="flex justify-between text-xs pt-1 border-t border-red-200">
-                        <span className="text-slate-600">Total assigned: <span className="font-semibold">{formatCents(total)}/mo</span></span>
-                        <span className={remaining > 0 ? 'text-red-700 font-semibold' : remaining < 0 ? 'text-amber-700 font-semibold' : 'text-green-700 font-semibold'}>
-                          {remaining > 0 ? `Gap: ${formatCents(remaining)}/mo` : remaining < 0 ? `Over by ${formatCents(-remaining)}/mo` : '✓ Fully covered'}
-                        </span>
-                      </div>
+                      )}
 
                       <button
                         onClick={() => confirmShortfall(r)}
-                        disabled={total === 0}
+                        disabled={!canConfirm || !!conflictState}
                         className="w-full text-xs font-semibold py-1.5 rounded-lg text-white bg-red-600 hover:bg-red-700 disabled:bg-red-300 transition-colors"
                       >
                         Confirm
@@ -198,48 +290,51 @@ export default function AllocationDrawer({
               <div className="space-y-3">
                 {surplusRanges.map((r, i) => {
                   const entry = getEntry(r)
-                  const total = entry.b2Cents + entry.b3Cents
-                  const remaining = r.avgCents - total
                   const b3Unavailable = !b3HasLoc
                   const b3Depleted = isB3Depleted(r)
+                  const canConfirm = entry.selectedBucket !== null && entry.amountCents > 0
+                  const isThisConflict = conflictState?.rangeKey === rangeKey(r)
                   return (
-                    <div key={i} className="border border-amber-200 rounded-lg p-3 bg-amber-50 space-y-2.5">
-                      <div>
-                        <div className="text-sm font-semibold text-slate-800">
-                          🟡 Ages {r.startAge}{r.endAge !== r.startAge ? `–${r.endAge}` : ''}: ~{formatCents(r.avgCents)}/mo surplus
+                    <div key={i} className={`border rounded-lg p-3 space-y-2.5 ${isThisConflict ? 'border-amber-300 bg-amber-50' : 'border-amber-200 bg-amber-50'}`}>
+                      <div className="text-sm font-semibold text-slate-800">
+                        🟡 Ages {r.startAge}{r.endAge !== r.startAge ? `–${r.endAge}` : ''}: ~{formatCents(r.avgCents)}/mo surplus
+                      </div>
+                      <div className="text-xs text-slate-500">Allocate this surplus to:</div>
+
+                      {/* Bucket buttons */}
+                      <div className="flex gap-2">
+                        <BucketButton
+                          label="B2 — Reinvest"
+                          color="blue"
+                          selected={entry.selectedBucket === 'b2'}
+                          onClick={() => setEntry(r, { ...entry, selectedBucket: entry.selectedBucket === 'b2' ? null : 'b2', amountCents: 0 })}
+                        />
+                        <BucketButton
+                          label="B3 — LOC Repay"
+                          color="red"
+                          selected={entry.selectedBucket === 'b3'}
+                          disabled={b3Depleted || b3Unavailable}
+                          disabledReason={b3Unavailable ? 'No LOC configured' : b3Depleted ? `B3 depleted at age ${depletionAges?.bucket3DepletionAge}` : undefined}
+                          onClick={() => setEntry(r, { ...entry, selectedBucket: entry.selectedBucket === 'b3' ? null : 'b3', amountCents: 0 })}
+                        />
+                      </div>
+
+                      {/* Amount input */}
+                      {entry.selectedBucket && (
+                        <div>
+                          <div className="text-xs text-slate-500 mb-1">Amount</div>
+                          <CurrencyInput
+                            value={entry.amountCents}
+                            onChange={v => setEntry(r, { ...entry, amountCents: v })}
+                            className="text-xs w-full"
+                          />
+                          <div className={`text-xs mt-1 ${entry.amountCents >= r.avgCents ? 'text-green-700' : 'text-amber-700'}`}>
+                            {entry.amountCents >= r.avgCents
+                              ? `✓ Fully allocated`
+                              : `Remaining: ${formatCents(r.avgCents - entry.amountCents)}/mo`}
+                          </div>
                         </div>
-                        <div className="text-xs text-slate-500 mt-0.5">Allocate this surplus to:</div>
-                      </div>
-
-                      {/* B2 deposit input */}
-                      <BucketAmountInput
-                        label="Bucket 2 — Reinvest (deposit)"
-                        value={entry.b2Cents}
-                        color="blue"
-                        onChange={v => setEntry(r, { ...entry, b2Cents: v })}
-                      />
-
-                      {/* B3 repayment input */}
-                      <BucketAmountInput
-                        label="Bucket 3 — LOC Repayment"
-                        value={entry.b3Cents}
-                        disabled={b3Depleted || b3Unavailable}
-                        disabledReason={
-                          b3Unavailable ? 'No LOC configured' :
-                          b3Depleted ? `B3 depleted at age ${depletionAges?.bucket3DepletionAge}` :
-                          undefined
-                        }
-                        color="red"
-                        onChange={v => setEntry(r, { ...entry, b3Cents: v })}
-                      />
-
-                      {/* Totals */}
-                      <div className="flex justify-between text-xs pt-1 border-t border-amber-200">
-                        <span className="text-slate-600">Total allocated: <span className="font-semibold">{formatCents(total)}/mo</span></span>
-                        <span className={remaining > 0 ? 'text-amber-700 font-semibold' : remaining < 0 ? 'text-red-700 font-semibold' : 'text-green-700 font-semibold'}>
-                          {remaining > 0 ? `Remaining: ${formatCents(remaining)}/mo` : remaining < 0 ? `Over by ${formatCents(-remaining)}/mo` : '✓ Fully allocated'}
-                        </span>
-                      </div>
+                      )}
 
                       <div className="flex gap-2">
                         <button
@@ -250,7 +345,8 @@ export default function AllocationDrawer({
                         </button>
                         <button
                           onClick={() => confirmSurplus(r)}
-                          className="flex-1 text-xs font-semibold py-1.5 rounded-lg text-white bg-amber-600 hover:bg-amber-700 transition-colors"
+                          disabled={!canConfirm || !!conflictState}
+                          className="flex-1 text-xs font-semibold py-1.5 rounded-lg text-white bg-amber-600 hover:bg-amber-700 disabled:bg-amber-300 transition-colors"
                         >
                           Confirm
                         </button>
@@ -282,35 +378,41 @@ export default function AllocationDrawer({
   )
 }
 
-function BucketAmountInput({
-  label, value, disabled, disabledReason, color, onChange,
+function BucketButton({
+  label,
+  color,
+  selected,
+  disabled,
+  disabledReason,
+  onClick,
 }: {
   label: string
-  value: number
+  color: 'blue' | 'red'
+  selected: boolean
   disabled?: boolean
   disabledReason?: string
-  color: 'blue' | 'red'
-  onChange: (cents: number) => void
+  onClick: () => void
 }) {
-  const ringColor = color === 'blue' ? 'focus:ring-blue-500' : 'focus:ring-red-500'
-  const dotColor = color === 'blue' ? 'bg-blue-500' : 'bg-red-500'
+  const baseClass = 'flex-1 text-xs py-2 px-3 rounded-lg border-2 font-medium transition-colors'
+  const selectedClass = color === 'blue'
+    ? 'bg-blue-600 border-blue-600 text-white'
+    : 'bg-red-600 border-red-600 text-white'
+  const unselectedClass = color === 'blue'
+    ? 'border-blue-300 text-blue-700 hover:bg-blue-50'
+    : 'border-red-300 text-red-700 hover:bg-red-50'
+  const disabledClass = 'border-slate-200 text-slate-400 bg-slate-50 cursor-not-allowed'
 
   return (
-    <div className={`flex items-center gap-2 ${disabled ? 'opacity-50' : ''}`}>
-      <div className={`w-2 h-2 rounded-full ${dotColor} shrink-0`} />
-      <span className="text-xs text-slate-700 flex-1 min-w-0 truncate">{label}</span>
-      {disabled ? (
-        <span className="text-xs text-slate-400 italic shrink-0">{disabledReason ?? 'Unavailable'}</span>
-      ) : (
-        <div className="shrink-0">
-          <CurrencyInput
-            value={value}
-            onChange={onChange}
-            className={`text-xs w-28 focus:ring-1 ${ringColor}`}
-          />
-        </div>
+    <button
+      onClick={!disabled ? onClick : undefined}
+      disabled={disabled}
+      title={disabledReason}
+      className={`${baseClass} ${disabled ? disabledClass : selected ? selectedClass : unselectedClass}`}
+    >
+      {label}
+      {disabled && disabledReason && (
+        <div className="text-[10px] font-normal mt-0.5 opacity-75 truncate">{disabledReason}</div>
       )}
-    </div>
+    </button>
   )
 }
-
