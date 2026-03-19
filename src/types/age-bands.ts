@@ -91,12 +91,14 @@ export function autoFillRange<T extends AgeBand>(
 ): T[] {
   if (addCents === 0 && mode === 'add') return bands
   const result: T[] = []
+  const newId = () => Math.random().toString(36).slice(2, 10)
+  let anyOverlap = false
   for (const band of bands) {
     if (band.end_age < startAge || band.start_age > endAge) {
       result.push(band)
       continue
     }
-    const newId = () => Math.random().toString(36).slice(2, 10)
+    anyOverlap = true
     if (band.start_age < startAge) {
       result.push({ ...band, id: newId(), end_age: startAge - 1 })
     }
@@ -110,6 +112,10 @@ export function autoFillRange<T extends AgeBand>(
     if (band.end_age > endAge) {
       result.push({ ...band, id: newId(), start_age: endAge + 1 })
     }
+  }
+  // No existing band covered the target range — create a new one
+  if (!anyOverlap) {
+    result.push({ id: newId(), start_age: startAge, end_age: endAge, monthly_amount_cents: addCents } as unknown as T)
   }
   return result.sort((a, b) => a.start_age - b.start_age)
 }
