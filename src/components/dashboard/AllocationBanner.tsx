@@ -35,12 +35,13 @@ function groupAges(surplusByAge: Record<number, number>, negative: boolean): Age
 
 interface Props {
   surplusByAge: Record<number, number>
+  acknowledgedKeys?: Set<string>
   onOpenDrawer: () => void
 }
 
-export default function AllocationBanner({ surplusByAge, onOpenDrawer }: Props) {
-  const shortfallRanges = groupAges(surplusByAge, true)
-  const surplusRanges = groupAges(surplusByAge, false)
+export default function AllocationBanner({ surplusByAge, acknowledgedKeys, onOpenDrawer }: Props) {
+  const shortfallRanges = groupAges(surplusByAge, true).filter(r => !acknowledgedKeys?.has(`${r.startAge}-${r.endAge}`))
+  const surplusRanges = groupAges(surplusByAge, false).filter(r => !acknowledgedKeys?.has(`${r.startAge}-${r.endAge}`))
 
   if (shortfallRanges.length === 0 && surplusRanges.length === 0) return null
 

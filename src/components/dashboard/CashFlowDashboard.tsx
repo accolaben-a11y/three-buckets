@@ -8,6 +8,7 @@ import AgeBandEditor from './AgeBandEditor'
 import PresentationBucketCard from './PresentationBucketCard'
 import AllocationBanner from './AllocationBanner'
 import AllocationDrawer from './AllocationDrawer'
+import type { AllocationMap } from './AllocationDrawer'
 import type { Scenario } from '@/app/clients/[clientId]/page'
 import type { FullCalculationResult } from '@/lib/calculations'
 import { defaultAgeBands, type AgeBands } from '@/types/age-bands'
@@ -56,6 +57,7 @@ export default function CashFlowDashboard({
   const [editingTarget, setEditingTarget] = useState(false)
   const [pdfLoading, setPdfLoading] = useState(false)
   const [drawerOpen, setDrawerOpen] = useState(false)
+  const [drawerAllocations, setDrawerAllocations] = useState<AllocationMap>({})
   const incomeChartRef = useRef<HTMLDivElement>(null)
   const longevityChartRef = useRef<HTMLDivElement>(null)
 
@@ -240,6 +242,11 @@ export default function CashFlowDashboard({
       {calcResult && Object.keys(calcResult.surplusByAge).length > 0 && (
         <AllocationBanner
           surplusByAge={calcResult.surplusByAge}
+          acknowledgedKeys={new Set(
+            Object.entries(drawerAllocations)
+              .filter(([, e]) => e.acknowledged)
+              .map(([k]) => k)
+          )}
           onOpenDrawer={() => setDrawerOpen(true)}
         />
       )}
@@ -252,6 +259,10 @@ export default function CashFlowDashboard({
           surplusByAge={calcResult.surplusByAge}
           adjustedTargetCents={adjustedTargetCents}
           ageBands={ageBands}
+          b3HasLoc={b3HasLoc}
+          depletionAges={depletionAges}
+          allocations={drawerAllocations}
+          onAllocationsChange={setDrawerAllocations}
           onAgeBandsUpdate={bands => onScenarioUpdate({ age_bands: bands })}
         />
       )}

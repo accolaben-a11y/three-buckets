@@ -59,18 +59,53 @@ export function getBandTransitionAges(bandsLists: AgeBand[][], fromAge: number, 
   return Array.from(ages).sort((a, b) => a - b)
 }
 
-/** Return a default AgeBands with a single band covering retirement to planning horizon */
-export function defaultAgeBands(retirementAge: number, planningHorizonAge: number): AgeBands {
+/** Return a default AgeBands with a single band covering age 62 to planning horizon */
+export function defaultAgeBands(_retirementAge: number, planningHorizonAge: number): AgeBands {
   const bandId = () => Math.random().toString(36).slice(2)
   return {
     bucket2: {
-      draws: [{ id: bandId(), start_age: retirementAge, end_age: planningHorizonAge, monthly_amount_cents: 0 }],
+      draws: [{ id: bandId(), start_age: 62, end_age: planningHorizonAge, monthly_amount_cents: 0 }],
       deposits: [],
     },
     bucket3: {
-      draws: [{ id: bandId(), start_age: retirementAge, end_age: planningHorizonAge, monthly_amount_cents: 0 }],
+      draws: [{ id: bandId(), start_age: 62, end_age: planningHorizonAge, monthly_amount_cents: 0 }],
       repayments: [],
     },
     surplus_acknowledgments: [],
   }
+}
+
+/**
+ * Add `addCents` to all bands that overlap the age range [startAge, endAge].
+ * Splits bands at the boundaries so the target range gets its own segments.
+ */
+export function autoFillRange<T extends AgeBand>(
+  bands: T[],
+  startAge: number,
+  endAge: number,
+  addCents: number,
+): T[] {
+  if (addCents === 0) return bands
+  const result: T[] = []
+  for (const band of bands) {
+    if (band.end_age < startAge || band.start_age > endAge) {
+      result.push(band)
+      continue
+    }
+    const newId = () => Math.random().toString(36).slice(2, 10)
+    if (band.start_age < startAge) {
+      result.push({ ...band, id: newId(), end_age: startAge - 1 })
+    }
+    result.push({
+      ...band,
+      id: newId(),
+      start_age: Math.max(band.start_age, startAge),
+      end_age: Math.min(band.end_age, endAge),
+      monthly_amount_cents: band.monthly_amount_cents + addCents,
+    })
+    if (band.end_age > endAge) {
+      result.push({ ...band, id: newId(), start_age: endAge + 1 })
+    }
+  }
+  return result.sort((a, b) => a.start_age - b.start_age)
 }
