@@ -70,6 +70,29 @@ export default function CashFlowDashboard({
     [scenario.id, scenario.age_bands, client.target_retirement_age, scenario.planning_horizon_age],
   )
 
+  // Compute persistent acknowledged range keys from surplus_acknowledgments.
+  // A stored acknowledgment is valid only if the current surplus amount for that
+  // range hasn't changed by more than $5/mo (500 cents). If it has, the surplus
+  // situation changed (e.g. B1 income edited) and the range resets to unresolved.
+  const acknowledgedKeys = useMemo(() => {
+    const acks = ageBands.surplus_acknowledgments
+    if (!acks || !calcResult) return new Set<string>()
+    const TOLERANCE = 500
+    const validKeys = acks
+      .filter(ack => {
+        const vals: number[] = []
+        for (let age = ack.start_age; age <= ack.end_age; age++) {
+          const v = calcResult.surplusByAge[age]
+          if (v !== undefined && v > 0) vals.push(v)
+        }
+        if (vals.length === 0) return false // range is now resolved
+        const avg = Math.round(vals.reduce((a, b) => a + b, 0) / vals.length)
+        return Math.abs(avg - ack.amount_cents) <= TOLERANCE
+      })
+      .map(ack => `${ack.start_age}-${ack.end_age}`)
+    return new Set(validKeys)
+  }, [ageBands.surplus_acknowledgments, calcResult])
+
   async function handleExportPDF() {
     if (!scenario || pdfLoading) return
     setPdfLoading(true)
@@ -251,11 +274,7 @@ export default function CashFlowDashboard({
       {calcResult && Object.keys(calcResult.surplusByAge).length > 0 && (
         <AllocationBanner
           surplusByAge={calcResult.surplusByAge}
-          acknowledgedKeys={new Set(
-            Object.entries(drawerAllocations)
-              .filter(([, e]) => e.acknowledged)
-              .map(([k]) => k)
-          )}
+          acknowledgedKeys={acknowledgedKeys}
           onOpenDrawer={() => setDrawerOpen(true)}
         />
       )}
@@ -270,6 +289,7 @@ export default function CashFlowDashboard({
           ageBands={ageBands}
           b3HasLoc={b3HasLoc}
           depletionAges={depletionAges}
+          acknowledgedKeys={acknowledgedKeys}
           allocations={drawerAllocations}
           onAllocationsChange={setDrawerAllocations}
           onAgeBandsUpdate={bands => onScenarioUpdate({ age_bands: bands })}

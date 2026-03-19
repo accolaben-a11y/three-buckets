@@ -331,8 +331,10 @@ export function runFullCalculation(input: FullCalculationInput): FullCalculation
   const b1AtRetirement = bucket1MonthlyByAge[retirementAge] ?? 0
   const b2DrawAtRetirement = b2DrawsByAge[retirementAge] ?? 0
   const b3DrawAtRetirement = b3DrawsByAge[retirementAge] ?? 0
+  const b2DepAtRetirement = b2DepositsByAge[retirementAge] ?? 0
+  const b3RepAtRetirement = b3RepaymentsByAge[retirementAge] ?? 0
 
-  const totalMonthlyIncomeCents = b1AtRetirement + b2DrawAtRetirement + b3DrawAtRetirement
+  const totalMonthlyIncomeCents = b1AtRetirement + b2DrawAtRetirement - b2DepAtRetirement + b3DrawAtRetirement - b3RepAtRetirement
   const shortfallCents = Math.max(0, adjustedTargetCents - totalMonthlyIncomeCents)
   const surplusCents = Math.max(0, totalMonthlyIncomeCents - adjustedTargetCents)
 

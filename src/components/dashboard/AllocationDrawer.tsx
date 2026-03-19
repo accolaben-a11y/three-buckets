@@ -9,7 +9,6 @@ import { autoFillRange } from '@/types/age-bands'
 export interface AllocationEntry {
   selectedBucket: 'b2' | 'b3' | null
   amountCents: number
-  acknowledged?: boolean
 }
 export type AllocationMap = Record<string, AllocationEntry>
 
@@ -29,6 +28,7 @@ interface Props {
   ageBands: AgeBands
   b3HasLoc: boolean
   depletionAges?: { bucket2DepletionAge?: number | null; bucket3DepletionAge?: number | null }
+  acknowledgedKeys?: Set<string>
   allocations: AllocationMap
   onAllocationsChange: (allocations: AllocationMap) => void
   onAgeBandsUpdate: (bands: AgeBands) => void
@@ -53,7 +53,7 @@ function hasConflictBands(bands: AgeBand[], startAge: number, endAge: number): n
 
 export default function AllocationDrawer({
   isOpen, onClose, surplusByAge, adjustedTargetCents, ageBands, b3HasLoc,
-  depletionAges, allocations, onAllocationsChange, onAgeBandsUpdate,
+  depletionAges, acknowledgedKeys, allocations, onAllocationsChange, onAgeBandsUpdate,
 }: Props) {
   const [conflictState, setConflictState] = useState<ConflictState | null>(null)
 
@@ -66,14 +66,10 @@ export default function AllocationDrawer({
 
   if (!isOpen) return null
 
-  const shortfallRanges = groupAges(surplusByAge, true).filter(r => {
-    const entry = allocations[rangeKey(r)]
-    return !entry?.acknowledged
-  })
-  const surplusRanges = groupAges(surplusByAge, false).filter(r => {
-    const entry = allocations[rangeKey(r)]
-    return !entry?.acknowledged
-  })
+  const shortfallRanges = groupAges(surplusByAge, true)
+  const surplusRangesAll = groupAges(surplusByAge, false)
+  const acknowledgedRanges = surplusRangesAll.filter(r => acknowledgedKeys?.has(rangeKey(r)))
+  const surplusRanges = surplusRangesAll.filter(r => !acknowledgedKeys?.has(rangeKey(r)))
 
   function getEntry(r: AgeRange): AllocationEntry {
     return allocations[rangeKey(r)] ?? { selectedBucket: null, amountCents: 0 }
@@ -163,7 +159,25 @@ export default function AllocationDrawer({
   }
 
   function acknowledgeRange(r: AgeRange) {
-    setEntry(r, { ...getEntry(r), acknowledged: true })
+    const key = rangeKey(r)
+    const existingAcks = ageBands.surplus_acknowledgments ?? []
+    const newAck = {
+      start_age: r.startAge,
+      end_age: r.endAge,
+      amount_cents: r.avgCents,
+      acknowledged: true,
+      acknowledged_at: new Date().toISOString(),
+    }
+    const updated = existingAcks.some(a => `${a.start_age}-${a.end_age}` === key)
+      ? existingAcks.map(a => `${a.start_age}-${a.end_age}` === key ? newAck : a)
+      : [...existingAcks, newAck]
+    onAgeBandsUpdate({ ...ageBands, surplus_acknowledgments: updated })
+  }
+
+  function unAcknowledgeRange(r: AgeRange) {
+    const key = rangeKey(r)
+    const updated = (ageBands.surplus_acknowledgments ?? []).filter(a => `${a.start_age}-${a.end_age}` !== key)
+    onAgeBandsUpdate({ ...ageBands, surplus_acknowledgments: updated })
   }
 
   return (
@@ -358,7 +372,30 @@ export default function AllocationDrawer({
             </div>
           )}
 
-          {shortfallRanges.length === 0 && surplusRanges.length === 0 && (
+          {/* Acknowledged surplus ranges (blue) */}
+          {acknowledgedRanges.length > 0 && (
+            <div>
+              <div className="text-xs font-semibold text-blue-700 uppercase tracking-wide mb-2">Acknowledged</div>
+              <div className="space-y-3">
+                {acknowledgedRanges.map((r, i) => (
+                  <div key={i} className="border border-blue-200 bg-blue-50 rounded-lg p-3 space-y-2.5">
+                    <div className="text-sm font-semibold text-slate-800">
+                      ✓ Ages {r.startAge}{r.endAge !== r.startAge ? `–${r.endAge}` : ''}: ~{formatCents(r.avgCents)}/mo surplus
+                    </div>
+                    <div className="text-xs text-blue-600">Acknowledged — no action needed.</div>
+                    <button
+                      onClick={() => unAcknowledgeRange(r)}
+                      className="w-full text-xs py-1.5 rounded-lg border border-blue-300 text-blue-700 hover:bg-blue-100 transition-colors"
+                    >
+                      Reopen
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {shortfallRanges.length === 0 && surplusRanges.length === 0 && acknowledgedRanges.length === 0 && (
             <div className="text-center text-slate-500 text-sm py-8">
               ✓ No shortfalls or surpluses — plan is fully balanced.
             </div>

@@ -126,7 +126,7 @@ export function projectRetirementPhase(input: RetirementProjectionInput): Yearly
     const effectiveB2Draw = b2Bal <= 0 ? 0 : b2Draw
     const effectiveB3Draw = bucket3Type === 'none' ? 0 : (b3Bal <= 0 ? 0 : b3Draw)
 
-    const totalMonthlyIncome = b1Income + effectiveB2Draw + effectiveB3Draw
+    const totalMonthlyIncome = b1Income + effectiveB2Draw - b2Deposit + effectiveB3Draw - b3Repayment
     const surplusCents = totalMonthlyIncome - targetMonthly
 
     snapshots.push({
