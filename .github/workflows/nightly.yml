@@ -1,0 +1,26 @@
+name: School Lunch Nightly Push
+
+on:
+  schedule:
+    # 01:00 UTC = 8pm CDT / 7pm CST. Sun-Thu only (school nights); see README.
+    - cron: "0 1 * * 0-4"
+  workflow_dispatch:
+
+jobs:
+  fetch-and-push:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r school-lunch-push/requirements.txt
+
+      - name: Fetch lunch menu and send push
+        env:
+          PUSHOVER_TOKEN: ${{ secrets.PUSHOVER_TOKEN }}
+          PUSHOVER_USER: ${{ secrets.PUSHOVER_USER }}
+        run: python school-lunch-push/fetch_lunch.py
